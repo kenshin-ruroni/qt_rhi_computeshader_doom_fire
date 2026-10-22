@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdint.h>
 #include <QVulkanInstance>
 #include <QRhiWidget>
 
@@ -11,209 +12,21 @@
 
 class Rasterizer : public QRhiWidget
 {
+
+    const uint32_t palette_fire[37] = {
+        0x070707FF, 0x1F0707FF, 0x2F0F07FF, 0x470F07FF,
+        0x571707FF, 0x671F07FF, 0x771F07FF, 0x8F2707FF,
+        0x9F2F07FF, 0xAF3F07FF, 0xBF4707FF, 0xC74707FF,
+        0xDF4F07FF, 0xDF5707FF, 0xDF570FFF, 0xD75F0FFF,
+        0xD7671FFF, 0xCF6F1FFF, 0xCF771FFF, 0xCF7F24FF,
+        0xC78724FF, 0xC78F2FFF, 0xC7972FFF, 0xBF9F2FFF,
+        0xBFA72FFF, 0xBFAF2FFF, 0xB7AF2FFF, 0xB7B72FFF,
+        0xB7B737FF, 0xCFCF6FFF, 0xDFDF9FFF, 0xEFEFC7FF,
+        0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+        0xFFFFFFFF
+    };
+
     Q_OBJECT
-
-    const char *vertex_shader = R"(
-
-        #version 430 core
-
-        // Input vertex attributes from your vertex buffer
-        layout(location = 0) in vec2 inPosition;
-        layout(location = 1) in vec2 inTexCoord;
-
-        // Output to the fragment shader
-        layout(location = 0) out vec2 vTexCoord;
-
-        void main() {
-            // Pass the texture coordinates to the fragment shader
-            vTexCoord = inTexCoord;
-
-            // Output standard clip-space position (Z=0.0, W=1.0)
-            gl_Position = vec4(inPosition, 0.0, 1.0);
-        }
-
-)";
-
-
-    const char *frag_shader = R"(
-
-            // Input from the vertex shader
-            layout(location = 0) in vec2 vTexCoord;
-
-            // Output color to the frame buffer
-            layout(location = 0) out vec4 fragColor;
-
-            // Texture and sampler binding (set 0, binding 1)
-            layout(set = 0, binding = 1) uniform sampler2D texSampler;
-
-            void main() {
-                // Sample the color from the texture using the coordinates
-                fragColor = texture(texSampler, vTexCoord);
-            }
-
-)";
-
-
-    const char* slang_compute_shader = R"(
-#version 430 core
-
-// Input: triangle strip data
-layout(std430, binding = 0) readonly buffer Triangles { vec2 vertices[]; };
-layout(std430, binding = 1) readonly buffer Indices { uint indices[]; };
-
-// Output: rendered image
-layout(std430, binding = 2) writeonly buffer OutputImage { uint pixels[]; };
-
-// Uniforms for rendering configuration
-layout(push_constant) uniform RenderParams {
-    uint triangleCount;
-    uint width;
-    uint height;
-    vec4 clearColor;
-} params;
-
-// Shared memory for fragment processing
-shared vec2 sharedVertices[3];
-
-// Main compute kernel
-void main() {
-    uint tid = gl_GlobalInvocationID.x;
-    uint totalPixels = params.width * params.height;
-
-    if (tid >= totalPixels) return;
-
-    // Convert linear pixel index to 2D coordinates
-    uint x = tid % params.width;
-    uint y = tid / params.width;
-
-    // Initialize pixel with clear color
-    pixels[tid] = uint(params.clearColor.r * 255.0) |
-                  (uint(params.clearColor.g * 255.0) << 8) |
-                  (uint(params.clearColor.b * 255.0) << 16) |
-                  (uint(params.clearColor.a * 255.0) << 24);
-
-    // Early exit if we're outside triangle bounds
-    if (params.triangleCount == 0) return;
-
-    // Process triangle strips
-    for (uint i = 0; i < params.triangleCount - 2; i++) {
-        uint baseIndex = i * 3;
-
-        // Load triangle vertices
-        vec2 v0 = vertices[indices[baseIndex]];
-        vec2 v1 = vertices[indices[baseIndex + 1]];
-        vec2 v2 = vertices[indices[baseIndex + 2]];
-
-        // Simple barycentric coordinate calculation
-        vec2 p = vec2(float(x), float(y));
-
-        // Compute barycentric coordinates
-        vec2 e0 = v1 - v0;
-        vec2 e1 = v2 - v0;
-        vec2 d = p - v0;
-
-        float dot00 = dot(e0, e0);
-        float dot01 = dot(e0, e1);
-        float dot02 = dot(e0, d);
-        float dot11 = dot(e1, e1);
-        float dot12 = dot(e1, d);
-
-        float invDenom = 1.0 / (dot00 * dot11 - dot01 * dot01);
-        float u = (dot11 * dot02 - dot01 * dot12) * invDenom;
-        float v = (dot00 * dot12 - dot01 * dot02) * invDenom;
-
-        // Check if point is inside triangle
-        if ((u >= 0.0) && (v >= 0.0) && (u + v <= 1.0)) {
-            // Simple color interpolation or flat shading
-            vec3 triangleColor = vec3(0.5, 0.8, 1.0); // Cool blue
-
-            // Convert color to packed uint format
-            uint color = uint(triangleColor.r * 255.0) |
-                         (uint(triangleColor.g * 255.0) << 8) |
-                         (uint(triangleColor.b * 255.0) << 16) |
-                         0xFF000000; // Alpha = 255
-
-            pixels[tid] = color;
-
-            // Early exit once we find a triangle
-            break;
-        }
-    }
-}
-)";
-
-
-    // Compute shader source code
-    const char *computeShaderSource = R"(
-    #version 450 core
-
-    layout(local_size_x = 16, local_size_y = 16) in;
-
-    // Output texture dimensions
-    const uint OUTPUT_WIDTH = 800;
-    const uint OUTPUT_HEIGHT = 600;
-
-    // Uniform buffer for triangle data
-    layout(std430, binding = 0) restrict readonly buffer TriangleBuffer {
-        float vertices[];
-    };
-
-    // Output image
-    layout(rgba8, binding = 1) writeonly uniform image2D outputImage;
-
-    // Triangle rasterization parameters
-    struct Triangle {
-        vec2 v0, v1, v2;
-        uint color;
-    };
-
-    void main() {
-        // Calculate pixel coordinates
-        uint x = gl_GlobalInvocationID.x;
-        uint y = gl_GlobalInvocationID.y;
-
-        if (x >= OUTPUT_WIDTH || y >= OUTPUT_HEIGHT) return;
-
-        // Simple triangle rasterization using barycentric coordinates
-        // This is a simplified example - in practice you'd use more sophisticated methods
-
-        // Sample triangle data from buffer (this is just an example)
-        uint triIndex = 0; // Simplified - in real app, you'd have multiple triangles
-        uint vertexOffset = triIndex * 6; // 3 vertices * 2 floats each
-
-        vec2 v0 = vec2(vertices[vertexOffset], vertices[vertexOffset + 1]);
-        vec2 v1 = vec2(vertices[vertexOffset + 2], vertices[vertexOffset + 3]);
-        vec2 v2 = vec2(vertices[vertexOffset + 4], vertices[vertexOffset + 5]);
-
-        // Barycentric coordinates
-        vec2 p = vec2(x, y);
-
-        vec2 e0 = v1 - v0;
-        vec2 e1 = v2 - v1;
-        vec2 e2 = v0 - v2;
-
-        vec2 v0p = p - v0;
-        vec2 v1p = p - v1;
-        vec2 v2p = p - v2;
-
-        float area = abs(e0.x * e1.y - e1.x * e0.y);
-
-        // Calculate barycentric coordinates
-        float w0 = abs(e1.x * v0p.y - e1.y * v0p.x) / area;
-        float w1 = abs(e2.x * v1p.y - e2.y * v1p.x) / area;
-        float w2 = abs(e0.x * v2p.y - e0.y * v2p.x) / area;
-
-        // Check if point is inside triangle
-        if (w0 + w1 + w2 < 1.01f && w0 > 0.0f && w1 > 0.0f && w2 > 0.0f) {
-            // Inside triangle - set color (red for demo)
-            vec4 color = vec4(1.0, 0.0, 0.0, 1.0);
-            imageStore(outputImage, ivec2(x, y), color);
-        } else {
-            // Outside - set transparent
-            imageStore(outputImage, ivec2(x, y), vec4(0.0));
-        }
-    }
-)";
 
 
 public:
@@ -338,7 +151,7 @@ private:
             QRhiTexture::RGBA8,               // Format (matches standard QImage/PNG raw data)
             size,                // Size of the texture
             1,                                // Sample count (1 for non-MSAA)
-            QRhiTexture::UsedWithLoadStore // | QRhiTexture::UsedAsTransferSource // Usage flag
+            QRhiTexture::UsedWithLoadStore | QRhiTexture::UsedAsTransferSource // Usage flag
             );
         if ( !compute_texture_out->create())
         {
@@ -351,7 +164,10 @@ private:
 
         QRhiTextureRenderTargetDescription rtDesc(m_rtTexture);
         customRenderTarget = m_rhi->newTextureRenderTarget(rtDesc);
-        customRenderTarget->create();
+        if (customRenderTarget->create() == false )
+        {
+            qFatal()<<"unable to create custom render target ";
+        }
 
         // Create resource bindings
         m_compute_pass_bindings = m_rhi->newShaderResourceBindings();
@@ -366,7 +182,7 @@ private:
                      5,                                      // Binding index in GLSL
                      QRhiShaderResourceBinding::ComputeStage, // Shader stage
                      compute_texture_out,                          // The QRhiTexture
-                     0                                       // Mip level
+                     0
                      )
              }
         });
@@ -432,8 +248,7 @@ private:
 
         QRhiVertexInputLayout inputLayout;
         inputLayout.setBindings({
-            { 2 * sizeof(float) } ,
-            { 2 * sizeof(float) }// Binding 0 stride
+            { 4 * sizeof(float) }
         });
         size_t o1 = offsetof(vertex_quad, position);
         size_t o2 = offsetof(vertex_quad, texCoord);
@@ -461,7 +276,7 @@ private:
         // Configure the layout bindings
         m_render_to_texture_shader_bindings->setBindings({
             QRhiShaderResourceBinding::sampledTexture(
-                0,                                    // Binding slot matching the shader
+                2,                                    // Binding slot matching the shader
                 QRhiShaderResourceBinding::FragmentStage,  // Visibility stage
                 compute_texture_out,                              // Your QRhiTexture*
                 sampler                               // Your QRhiSampler*
@@ -469,18 +284,26 @@ private:
         });
 
         // Allocate and build backend resources
-        m_render_to_texture_shader_bindings->create();
+        if ( m_render_to_texture_shader_bindings->create() == false )
+        {
+            qFatal()<<"unable to create texture shader ";
+        }
 
         m_render_to_texture_pipeline->setShaderResourceBindings(m_render_to_texture_shader_bindings);
         m_render_to_texture_pipeline->setVertexInputLayout(inputLayout);
         m_render_to_texture_pipeline->setRenderPassDescriptor( renderTarget()->renderPassDescriptor());
-
-        m_render_to_texture_pipeline->create();
+        m_render_to_texture_pipeline->setCullMode(QRhiGraphicsPipeline::None);
+        m_render_to_texture_pipeline->setTopology(QRhiGraphicsPipeline::Triangles);
+        if ( m_render_to_texture_pipeline->create() == false )
+        {
+            qFatal()<<"unable to create texture pipeline ";
+        }
 
         QRhiResourceUpdateBatch *resourceUpdates = m_rhi->nextResourceUpdateBatch();
         resourceUpdates->uploadStaticBuffer(m_render_to_texture_vertex_buffer, quadVertices);
         cb->resourceUpdate(resourceUpdates);
 
+        /*
         QImage img(QStringLiteral("wallpaperflare.com_wallpaper.jpg"));
         if (img.isNull()) {
             qWarning() << "Impossible de charger le fichier PNG !";
@@ -491,7 +314,7 @@ private:
         //convertToFormat(QImage::Format_RGBA8888) garantit la compatibilité avec QRhiTexture::RGBA8
 
 
-        rgbaImg.save("rscaled.png");
+        rgbaImg.save("rscaled.png");*/
 
     }
 
@@ -513,16 +336,16 @@ private:
 
             cb->setShaderResources(m_compute_pass_bindings);
 
-            cb->dispatch(size.rwidth()/8, size.rheight()/8,1);
+            cb->dispatch(size.rwidth()/32, size.rheight()/32,1);
 
-           // QRhiReadbackDescription rb(compute_texture_out);
+            QRhiReadbackDescription rb(compute_texture_out);
 
 
-          //  computeBatch->readBackTexture(rb, &rbResult);
+         //   computeBatch->readBackTexture(rb, &rbResult);
 
             cb->endComputePass(computeBatch);
 
-            /* rbResult.completed = [this]() {
+         /*    rbResult.completed = [this]() {
                 if (!rbResult.data.isEmpty()) {
                     // Les données brutes sont dans result->data (QByteArray)
                     const uchar *pixels = reinterpret_cast<const uchar *>(rbResult.data.constData());
@@ -534,15 +357,18 @@ private:
                     bool s = image.save("image_gpu.png");
                     int i = 0;
                 }
-            }; */
-
+            };
+    */
 
             QRhiResourceUpdateBatch *nextBatch = m_rhi->nextResourceUpdateBatch();
 
             // Clear output texture (if needed)
             QRhiRenderTarget *rt = renderTarget();
-            const QColor clearColor = QColor::fromRgbF(0.f, 1.f,0,1.f );
-            cb->setViewport({0.f,0.f,float(size.rwidth()), float(size.rheight())});
+            const QColor clearColor = QColor::fromRgbF(1.f, 0.f,0.f,1.f );
+            QSize currentPixelSize = rt->pixelSize();
+            // Déclaration stricte du Viewport via le constructeur QRhiViewport
+            cb->setViewport(QRhiViewport(0.0f, 0.0f, float(currentPixelSize.width()), float(currentPixelSize.height())));
+
             cb->beginPass( rt, clearColor, { 1.0f, 0 },nextBatch);
 
 
@@ -550,13 +376,14 @@ private:
 
             cb->setGraphicsPipeline(m_render_to_texture_pipeline);
             cb->setShaderResources(m_render_to_texture_shader_bindings);
-
+            const QRhiCommandBuffer::VertexInput vertexBinding(m_render_to_texture_vertex_buffer, 0);
+            cb->setVertexInput(0, 1, &vertexBinding);
             // 5. Exécution du dessin (6 sommets pré-chargés)
             cb->draw(6);
 
 
 
-          cb->endPass(nextBatch);
+          cb->endPass();
 
 
 

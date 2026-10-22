@@ -23,6 +23,7 @@ qt_add_executable(${PROJECT_NAME}
     rasterizer.cpp
     mainwindow.h mainwindow.cpp
     mainwindow.ui
+    rasterize.comp
 )
 
 

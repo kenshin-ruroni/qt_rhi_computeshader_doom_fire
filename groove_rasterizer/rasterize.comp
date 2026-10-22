@@ -1,6 +1,6 @@
 #version 460 core
 
-layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+layout(local_size_x = 32, local_size_y = 32, local_size_z = 1) in;
 
 // Uniform buffer for triangle data
 layout(std430, binding = 0)  buffer TriangleBuffer {
@@ -21,9 +21,12 @@ void main() {
     uint x = gl_GlobalInvocationID.x;
     uint y = gl_GlobalInvocationID.y;
 
-    ivec2 size = imageSize(outputImage);
 
-    vec4 color = vec4(0.2,0.2,0.2,1.); // imageLoad(outputImage,ivec2(x ,y)  );
+    vec4 color = vec4(1.0, 0.0, 0.0, 1.0);
+
+    imageStore(outputImage, ivec2(x, y), color);
+
+    ivec2 size = imageSize(outputImage);
 
     if ( x % 50 <= 5)
     {
@@ -34,48 +37,6 @@ void main() {
         color += vec4(0,0.2,0.,0.);
     }
 
-    // imageStore(outputImage,ivec2(x ,y) , color);
+     imageStore(outputImage,ivec2(x ,y) , color);
 
-
-
-    // Simple triangle rasterization using barycentric coordinates
-    // This is a simplified example - in practice you'd use more sophisticated methods
-
-    // Sample triangle data from buffer (this is just an example)
-    uint triIndex = 0; // Simplified - in real app, you'd have multiple triangles
-    uint vertexOffset = triIndex * 3; // 3 vertices * 2 floats each
-
-    vertexOffset = min(vertices.length(),vertexOffset);
-
-    vec2 v0 = vec2(vertices[vertexOffset], vertices[vertexOffset + 1]);
-    vec2 v1 = vec2(vertices[vertexOffset + 2], vertices[vertexOffset + 3]);
-    vec2 v2 = vec2(vertices[vertexOffset + 4], vertices[vertexOffset + 5]);
-
-    // Barycentric coordinates
-    vec2 p = vec2(x, y);
-
-    vec2 e0 = v1 - v0;
-    vec2 e1 = v2 - v1;
-    vec2 e2 = v0 - v2;
-
-    vec2 v0p = p - v0;
-    vec2 v1p = p - v1;
-    vec2 v2p = p - v2;
-
-    float area = abs(e0.x * e1.y - e1.x * e0.y);
-
-    // Calculate barycentric coordinates
-    float w0 = abs(e1.x * v0p.y - e1.y * v0p.x) / area;
-    float w1 = abs(e2.x * v1p.y - e2.y * v1p.x) / area;
-    float w2 = abs(e0.x * v2p.y - e0.y * v2p.x) / area;
-
-    // Check if point is inside triangle
-    if (w0 + w1 + w2 < 1.01f && w0 > 0.0f && w1 > 0.0f && w2 > 0.0f) {
-        // Inside triangle - set color (red for demo)
-        vec4 color = vec4(1.0, 0.0, 0.0, 1.0);
-        imageStore(outputImage, ivec2(x, y), color);
-    } else {
-        // Outside - set transparent
-        imageStore(outputImage, ivec2(x, y), color);
-    }
 }
