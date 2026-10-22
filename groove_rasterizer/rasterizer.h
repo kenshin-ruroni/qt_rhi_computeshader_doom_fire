@@ -1,4 +1,8 @@
 #pragma once
+
+#include <cstdlib>
+#include <cmath>
+
 #include <vector>
 #include <stdint.h>
 #include <QVulkanInstance>
@@ -90,8 +94,8 @@ private:
     }
 
     inline void spread_fire(size_t from) {
-
-        fire_matrix[from] = fire_matrix[from - fire_matrix_width] + 1 ;
+         uint32_t rand = static_cast<uint32_t>(std::round((static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX) ) * 3.0f)) & 3;
+        fire_matrix[from] = fire_matrix[from - fire_matrix_width] + (rand & 1) ;
     }
 
     QShader getShader(const QString &resourcePath) {
@@ -173,11 +177,11 @@ private:
 
     size_t fire_matrix_width, fire_matrix_height;
 
-    std::vector<uint32_t> fire_matrix;
+    std::vector<uint32_t> fire_matrix; // contient un index de palette
 
     size_t fire_height = 37;
 
-    size_t palette_index = 1;
+    size_t palette_index = 0;
 
     protected:
 
