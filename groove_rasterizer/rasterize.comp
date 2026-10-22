@@ -2,39 +2,54 @@
 
 layout(local_size_x = 32, local_size_y = 32, local_size_z = 1) in;
 
-// Uniform buffer for triangle data
-layout(std430, binding = 0)  buffer TriangleBuffer {
-    float vertices[];
+layout(std430, binding = 0) readonly buffer PaletteSSBO {
+    // 4 tableaux de 37 valeurs uint compactes (alignement parfait à 4 octets)
+    uint palettes[];
+};
+
+// DÉCLARATION DU SSBO
+layout(std430, binding = 1) buffer FireMatrixSSBO {
+    // indice 0 et 1 contiennent les dimensions du buffer 2d du feu
+    uint fire_matrix[]; // Tableau dynamique (sans taille fixe) de uint (32 bits)
 };
 
 // Output image
 layout(binding = 5,rgba8  ) uniform coherent image2D outputImage;
 
-// Triangle rasterization parameters
-struct Triangle {
-    vec2 v0, v1, v2;
-    uint color;
-};
+vec4 uint_to_rgba(uint i)
+{
+    // Dépaquetage au format inversé (AABBGGRR) provoqué par le Little-Endian du GPU
+    float a = float(i & 0xFFu) / 255.0;         // Le rouge est maintenant tout à droite
+    float b = float((i >> 8) & 0xFFu) / 255.0;  // Le vert est au milieu
+    float g = float((i >> 16) & 0xFFu) / 255.0; // Le bleu est ici
+    float r = float((i >> 24) & 0xFFu) / 255.0; // L'alpha est tout à gauche
+
+    return vec4(r, g, b, a);
+}
 
 void main() {
     // Calculate pixel coordinates
     uint x = gl_GlobalInvocationID.x;
     uint y = gl_GlobalInvocationID.y;
 
-
-    vec4 color = vec4(1.0, 0.0, 0.0, 1.0);
-
-    imageStore(outputImage, ivec2(x, y), color);
-
     ivec2 size = imageSize(outputImage);
 
-    if ( x % 50 <= 5)
-    {
-        color += vec4(0,0,0.4,0.);
+    if (x >= uint(size.x) || y >= uint(size.y)) {
+        return;
     }
-    if ( y % 50 < 5)
+
+    vec4 color = vec4(0.0, 0.0, 0.0, 1.0);
+
+    uint palette_index = 0;
+    uint size_y  = fire_matrix[1];
+    uint size_x = fire_matrix[0];
+    uint yy =  (size.y - 1 ) - y;
+    if ( yy < size_y )
     {
-        color += vec4(0,0.2,0.,0.);
+
+        uint index_color = palette_index * size_y + yy;
+        fire_matrix[ 2 + x + yy * size_x ] = palettes[ index_color];
+        color = uint_to_rgba( fire_matrix[2 + x + yy * size_x ] );
     }
 
      imageStore(outputImage,ivec2(x ,y) , color);

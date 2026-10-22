@@ -1,9 +1,9 @@
 #pragma once
-
+#include <vector>
 #include <stdint.h>
 #include <QVulkanInstance>
 #include <QRhiWidget>
-
+#include <QWindow>
 #include <QVector2D>
 #include <QMatrix4x4>
 #include <QFile>
@@ -13,18 +13,61 @@
 class Rasterizer : public QRhiWidget
 {
 
-    const uint32_t palette_fire[37] = {
-        0x070707FF, 0x1F0707FF, 0x2F0F07FF, 0x470F07FF,
-        0x571707FF, 0x671F07FF, 0x771F07FF, 0x8F2707FF,
-        0x9F2F07FF, 0xAF3F07FF, 0xBF4707FF, 0xC74707FF,
-        0xDF4F07FF, 0xDF5707FF, 0xDF570FFF, 0xD75F0FFF,
-        0xD7671FFF, 0xCF6F1FFF, 0xCF771FFF, 0xCF7F24FF,
-        0xC78724FF, 0xC78F2FFF, 0xC7972FFF, 0xBF9F2FFF,
-        0xBFA72FFF, 0xBFAF2FFF, 0xB7AF2FFF, 0xB7B72FFF,
-        0xB7B737FF, 0xCFCF6FFF, 0xDFDF9FFF, 0xEFEFC7FF,
-        0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
-        0xFFFFFFFF
-    };
+    std::vector< uint32_t > palettes = {
+    // red fire
+
+        0xFFFFFFFF, // Index 0 : L'unique case Blanc Pur tout à droite
+        0xEFEFC7FF, // Index 1 : Crème / Ivoire très clair (2e case en partant de la droite)
+        0xDFDF9FFF, // Index 2 : Jaune pastel très doux (3e case en partant de la droite)
+        0xCFCF6FFF, // Index 3 : Jaune maïs / doré (4e case en partant de la droite)
+        // Reste du dégradé qui continue vers le orange, rouge, puis noir
+        0xB7B737FF, 0xB7B72FFF, 0xB7AF2FFF, 0xBFAF2FFF,
+        0xBFA72FFF, 0xBF9F2FFF, 0xC7972FFF, 0xC78F2FFF,
+        0xC78724FF, 0xCF7F24FF, 0xCF771FFF, 0xCF6F1FFF,
+        0xD7671FFF, 0xD75F0FFF, 0xDF570FFF, 0xDF5707FF,
+        0xDF4F07FF, 0xC74707FF, 0xBF4707FF, 0xAF3F07FF,
+        0x9F2F07FF, 0x8F2707FF, 0x771F07FF, 0x671F07FF,
+        0x571707FF, 0x470F07FF, 0x2F0F07FF, 0x1F0707FF,
+        0x070707FF, 0x070707FF, 0x070707FF, 0x070707FF,
+        0x070707FF,
+     // green fire
+        0xFFFFFFFF, // Index 0 : L'unique case Blanc Pur
+        0xEFEFC7FF, 0xDFDF9FFF, 0xCFCF6FFF, 0xB7B737FF, // Descentes vers le jaune-vert clair
+        0x97B72FFF, 0x77AF2FFF, 0x57AF2FFF, 0x37AF2FFF,
+        0x1F9F2FFF, 0x0F972FFF, 0x078F2FFF, 0x078724FF, // Cœur de flamme vert électrique
+        0x077F24FF, 0x07771FFF, 0x076F1FFF, 0x07671FFF,
+        0x075F0FFF, 0x07570FFF, 0x075707FF, 0x074F07FF, // Dégradés vert sapin / émeraude
+        0x074707FF, 0x073F07FF, 0x073F07FF, 0x072F07FF,
+        0x072707FF, 0x071F07FF, 0x071F07FF, 0x071707FF, // Refroidissement sombre
+        0x070F07FF, 0x070F07FF, 0x070707FF, 0x070707FF,
+        0x070707FF, 0x070707FF, 0x070707FF, 0x070707FF,
+
+        //purple fire
+        0xFFFFFFFF, // Index 0 : L'unique case Blanc Pur
+        0xF4EFE7FF, 0xECEFDFFF, 0xE0CFCFFF, 0xDCB7B7FF, // Transitions douces pastel
+        0xDCB7B7FF, 0xD4AFB7FF, 0xD4AFBFFF, 0xCCA7BFFF,
+        0xCC9FBFFF, 0xCC97C7FF, 0xC48FC7FF, 0xC487C7FF, // Magenta et violets électriques très vifs
+        0xC47FCFFF, 0xC477CFFF, 0xBC6FCFFF, 0xBC67D7FF,
+        0xBC5FD7FF, 0xBC57DFFF, 0xB457DFFF, 0xAC4FDFFF, // Indigos profonds à moyenne énergie
+        0x9747C7FF, 0x9047BFFF, 0x823FAFFF, 0x732F9FFF,
+        0x67278FFF, 0x541F77FF, 0x471F67FF, 0x3B1757FF, // Teintes pourpres nocturnes
+        0x2E0F47FF, 0x1F0F2FFF, 0x14071FFF, 0x070707FF,
+        0x070707FF, 0x070707FF, 0x070707FF, 0x070707FF,
+      // blue fire
+        0xFFFFFFFF, // Index 0 : L'unique case Blanc Pur
+        0xC7EFEFFF, 0x9FDFDFFF, 0x6FCFCFFF, 0x37B7B7FF, // Descentes vers le cyan arctique éclatant
+        0x2FB7B7FF, 0x2FAFB7FF, 0x2FAFBFFF, 0x2FA7BFFF,
+        0x2F9FBFFF, 0x2F97C7FF, 0x2F8FC7FF, 0x2487C7FF, // Bleus néon intenses
+        0x247FCFFF, 0x1F77CFFF, 0x1F6FCFFF, 0x1F67D7FF,
+        0x0F5FD7FF, 0x0F57DFFF, 0x0F57DFFF, 0x0F4FDFFF, // Bleus saphir profonds
+        0x0F47C7FF, 0x0F47BFFF, 0x0F3FAFFF, 0x072F9FFF,
+        0x07278FFF, 0x071F77FF, 0x071F67FF, 0x071757FF, // Bleux cobalt de fin de combustion
+        0x070F47FF, 0x070F2FFF, 0x07071FFF, 0x070707FF,
+        0x070707FF, 0x070707FF, 0x070707FF, 0x070707FF,
+
+};
+
+
 
     Q_OBJECT
 
@@ -61,18 +104,21 @@ private:
 
 
     void setupComputePipeline();
-    void setupVertexData();
+
     void createComputeShader();
     void setup_ssbo_buffer();
     void update_ssbo_buffer();
 
-    QWindow *m_window;
     QRhi *m_rhi;
 
     QRhiTexture *m_outputTexture;
     QRhiComputePipeline *m_computePipeline;
     QRhiResourceUpdateBatch *m_resourceUpdates;
-    QRhiBuffer *m_ssbo_buffer;
+
+    QRhiBuffer *fire_matrix_ssbo_buffer;
+
+    QRhiBuffer *palettes_ssbo_buffer = nullptr;
+
     QRhiShaderResourceBindings *m_compute_pass_bindings;
 
     QRhiShaderResourceBindings *m_render_to_texture_bindings;
@@ -109,16 +155,28 @@ private:
 
     QImage rgbaImg;
 
+    size_t window_width, window_height;
+
+    std::vector<uint32_t> fire_matrix;
+
+    size_t fire_height = 37;
+
     protected:
 
     void initialize(QRhiCommandBuffer *cb) override
     {
 
+        // Récupération automatique et sécurisée de la taille réelle en pixels physiques
+        QSize pixelSize = renderTarget()->pixelSize();
 
-        setupVertexData();
+        window_width = pixelSize.width();
+        window_height = fire_height;
 
+        // On réserve la taille : 2 emplacements (pour X et Y) + la taille du tableau 2D linéarisé
+        fire_matrix.resize( 2 + window_width * fire_height, 0);
 
-        m_window = (QWindow *)parentWidget()->parentWidget();
+        fire_matrix[0] = window_width;
+        fire_matrix[1] = window_height;
 
          m_rhi = rhi();
         if (!m_rhi) {
@@ -131,21 +189,37 @@ private:
         QRhiRenderPassDescriptor *rp = swapChain->newCompatibleRenderPassDescriptor();
         swapChain->setRenderPassDescriptor(rp);
 
-        setupVertexData();
-
-
         size = renderTarget()->pixelSize();
 
         // Create ssbo buffer for triangle data
-        m_ssbo_buffer = m_rhi->newBuffer(QRhiBuffer::Dynamic,
+        fire_matrix_ssbo_buffer = m_rhi->newBuffer(QRhiBuffer::Dynamic,
                                          QRhiBuffer::StorageBuffer,
-                                         m_vertices.size() * sizeof(Vertex));
+                                         fire_matrix.size() * sizeof(uint32_t));
 
-        if (!m_ssbo_buffer->create()) {
+        if (!fire_matrix_ssbo_buffer->create()) {
             qWarning() << "Failed to create ssbo buffer";
         }
 
-        update_ssbo_buffer();
+        // 2. Téléversement immédiat des données vers le GPU
+        QRhiResourceUpdateBatch *initfireMatrixUpdates = m_rhi->nextResourceUpdateBatch();
+        initfireMatrixUpdates->uploadStaticBuffer(fire_matrix_ssbo_buffer, fire_matrix.data());
+        cb->resourceUpdate(initfireMatrixUpdates); // Soumission de la mise à jour
+
+        // 1. Allocation du tampon sur le GPU (Mode statique car les palettes ne changent pas)
+        palettes_ssbo_buffer = m_rhi->newBuffer(
+            QRhiBuffer::Static,
+            QRhiBuffer::StorageBuffer, // Type correspond au layout(std430) buffer du shader
+            palettes.size() * sizeof(uint32_t)
+            );
+
+        if (!palettes_ssbo_buffer->create()) {
+            qFatal("Impossible de créer le tampon de palettes RHI");
+        }
+
+        // 2. Téléversement immédiat des données vers le GPU
+        QRhiResourceUpdateBatch *initUpdates = m_rhi->nextResourceUpdateBatch();
+        initUpdates->uploadStaticBuffer(palettes_ssbo_buffer, palettes.data());
+        cb->resourceUpdate(initUpdates); // Soumission de la mise à jour
 
         compute_texture_out = m_rhi->newTexture(
             QRhiTexture::RGBA8,               // Format (matches standard QImage/PNG raw data)
@@ -174,7 +248,10 @@ private:
         m_compute_pass_bindings->setBindings(
         {
             {
-                QRhiShaderResourceBinding::bufferStore(0, QRhiShaderResourceBinding::ComputeStage,m_ssbo_buffer )
+                 QRhiShaderResourceBinding::bufferStore(0, QRhiShaderResourceBinding::ComputeStage, palettes_ssbo_buffer)
+            },
+            {
+                QRhiShaderResourceBinding::bufferStore(1, QRhiShaderResourceBinding::ComputeStage,fire_matrix_ssbo_buffer )
             },
              {
                  // Binding 0: Image storage for compute writing
@@ -336,7 +413,9 @@ private:
 
             cb->setShaderResources(m_compute_pass_bindings);
 
-            cb->dispatch(size.rwidth()/32, size.rheight()/32,1);
+            uint32_t groupX = (size.rwidth() + 31) / 32;
+            uint32_t groupY = (size.rheight() + 31) / 32;
+            cb->dispatch(groupX, groupY, 1);
 
             QRhiReadbackDescription rb(compute_texture_out);
 
