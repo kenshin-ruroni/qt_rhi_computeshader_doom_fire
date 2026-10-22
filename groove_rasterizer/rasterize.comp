@@ -47,9 +47,16 @@ void main() {
     if ( yy < size_y )
     {
 
+        /*
         uint index_color = palette_index * size_y + yy;
-        fire_matrix[ 2 + x + yy * size_x ] = palettes[ index_color];
+
+
+            fire_matrix[ 2 + x + yy * size_x ] = palettes[ index_color ];
+
         color = uint_to_rgba( fire_matrix[2 + x + yy * size_x ] );
+        */
+
+        color = uint_to_rgba(  palettes[fire_matrix[2 + x + yy * size_x ]] );
     }
 
      imageStore(outputImage,ivec2(x ,y) , color);

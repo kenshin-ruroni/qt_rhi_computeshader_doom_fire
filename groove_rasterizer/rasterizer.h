@@ -9,6 +9,7 @@
 #include <QFile>
 #include <rhi/qrhi.h>
 
+#define DEBUG_COMPUTE_SHADER_RESULT 0
 
 class Rasterizer : public QRhiWidget
 {
@@ -77,6 +78,21 @@ public:
 
 private:
 
+
+    inline void update_fire_matrix()
+    {
+        for(size_t x = 0 ; x < fire_matrix_width; ++x) {
+            for (size_t y = 1; y < fire_matrix_height ; ++y) {
+                spread_fire(2 + y * fire_matrix_width + x);
+            }
+        }
+
+    }
+
+    inline void spread_fire(size_t from) {
+
+        fire_matrix[from] = fire_matrix[from - fire_matrix_width] + 1 ;
+    }
 
     QShader getShader(const QString &resourcePath) {
         // 1. Ouverture du fichier binaire .qsb dans les ressources Qt
@@ -155,11 +171,13 @@ private:
 
     QImage rgbaImg;
 
-    size_t window_width, window_height;
+    size_t fire_matrix_width, fire_matrix_height;
 
     std::vector<uint32_t> fire_matrix;
 
     size_t fire_height = 37;
+
+    size_t palette_index = 1;
 
     protected:
 
@@ -169,14 +187,21 @@ private:
         // Récupération automatique et sécurisée de la taille réelle en pixels physiques
         QSize pixelSize = renderTarget()->pixelSize();
 
-        window_width = pixelSize.width();
-        window_height = fire_height;
+        fire_matrix_width = pixelSize.width();
+        fire_matrix_height = fire_height;
 
         // On réserve la taille : 2 emplacements (pour X et Y) + la taille du tableau 2D linéarisé
-        fire_matrix.resize( 2 + window_width * fire_height, 0);
+        fire_matrix.resize( 2 + fire_matrix_width * fire_height, 0);
 
-        fire_matrix[0] = window_width;
-        fire_matrix[1] = window_height;
+        fire_matrix[0] = fire_matrix_width;
+        fire_matrix[1] = fire_matrix_height;
+
+
+
+        for(size_t x = 0 ; x < fire_matrix_width; ++x)
+        {
+            fire_matrix[2 + x] = palette_index * fire_matrix_height;
+        }
 
          m_rhi = rhi();
         if (!m_rhi) {
@@ -395,8 +420,9 @@ private:
 
     }
 
+#if DEBUG_COMPUTE_SHADER_RESULT == 1
     QRhiReadbackResult rbResult;
-
+#endif
     void render(QRhiCommandBuffer *cb) override
     {
 
@@ -419,12 +445,13 @@ private:
 
             QRhiReadbackDescription rb(compute_texture_out);
 
-
-         //   computeBatch->readBackTexture(rb, &rbResult);
-
+#if DEBUG_COMPUTE_SHADER_RESULT == 1
+           computeBatch->readBackTexture(rb, &rbResult);
+#endif
             cb->endComputePass(computeBatch);
 
-         /*    rbResult.completed = [this]() {
+#if DEBUG_COMPUTE_SHADER_RESULT == 1
+            rbResult.completed = [this]() {
                 if (!rbResult.data.isEmpty()) {
                     // Les données brutes sont dans result->data (QByteArray)
                     const uchar *pixels = reinterpret_cast<const uchar *>(rbResult.data.constData());
@@ -437,7 +464,7 @@ private:
                     int i = 0;
                 }
             };
-    */
+#endif
 
             QRhiResourceUpdateBatch *nextBatch = m_rhi->nextResourceUpdateBatch();
 
@@ -464,12 +491,14 @@ private:
 
           cb->endPass();
 
-
-
-
-
-
           update();
+
+          update_fire_matrix();
+          // 2. Téléversement immédiat des données vers le GPU
+          QRhiResourceUpdateBatch *updatefireMatrixUpdates = m_rhi->nextResourceUpdateBatch();
+          updatefireMatrixUpdates->updateDynamicBuffer(fire_matrix_ssbo_buffer,0,fire_matrix.size() * sizeof(uint32_t), fire_matrix.data());
+          cb->resourceUpdate(updatefireMatrixUpdates); // Soumission de la mise à jour
+
     }
 };
 
