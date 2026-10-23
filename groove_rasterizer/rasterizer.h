@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cmath>
 
+#include <random>
 #include <vector>
 #include <stdint.h>
 #include <QVulkanInstance>
@@ -12,6 +13,7 @@
 #include <QMatrix4x4>
 #include <QFile>
 #include <rhi/qrhi.h>
+#include <QPainter>
 
 #define DEBUG_COMPUTE_SHADER_RESULT 0
 
@@ -82,6 +84,16 @@ public:
 
 private:
 
+
+    std::random_device rd;
+
+    // 2. Choisir un moteur de génération (Mersenne Twister 64-bit est excellent)
+    std::mt19937 gen = std::mt19937(rd());
+
+    size_t max_rnd = 4;
+    // 3. Définir la distribution uniforme entre 0 et 3 inclus [0, 3]
+    std::uniform_int_distribution<int> distrib = std::uniform_int_distribution<int>(0, max_rnd);
+
     /*
      * https://github.com/StanislavPetrovV/DOOM-Fire-Algorithm
      *
@@ -89,18 +101,40 @@ private:
 
     inline void spread_fire(size_t from) {
 
-        uint32_t m = static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX) * 20.f;
+        uint32_t m = static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX) * 6.f;
 
-         uint32_t rand = static_cast<uint32_t>(std::round((static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX) ) * m )) & 11;
+         uint32_t rand = static_cast<uint32_t>(std::round((static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX) ) * m )) & 7;
 
         fire_matrix[from] = (fire_matrix[from - fire_matrix_width] + rand  )  % 37 ;
     }
 
-    inline void update_fire_matrix()
+    inline void update_fire_matrix_old()
     {
         for(size_t x = 0 ; x < fire_matrix_width; ++x) {
             for (size_t y = 1; y < fire_matrix_height ; ++y) {
                 spread_fire(4 + y * fire_matrix_width + x);
+            }
+        }
+
+    }
+
+    inline void update_fire_matrix()
+    {
+        for(size_t x = 0 ; x < fire_matrix_width; ++x)
+        {
+            for (size_t y = 1; y < fire_matrix_height ; ++y)
+            {
+                uint32_t color_index = fire_matrix[4 + x + fire_matrix_width * y];
+                uint rnd = distrib(gen); // nombre entre 0 et 3
+
+               // qDebug("%i ",(int) ( (x - rnd + 1) % fire_matrix_width ) );
+                if ( color_index != 36)
+                {
+                    fire_matrix[ 4 + (x - rnd + 1) % fire_matrix_width +  fire_matrix_width * (y - 1) ] = (color_index - rnd % (max_rnd - 1)) % 37;
+                }
+               else{
+                   fire_matrix[ 4 + x  +  fire_matrix_width * (y - 1) ] = 0;
+               }
             }
         }
 
@@ -192,8 +226,8 @@ private:
     size_t palette_index = 0;
 
 
-    size_t scale_x = 12;
-    size_t scale_y = 12;
+    size_t scale_x = 4;
+    size_t scale_y = 4;
 
     protected:
 
@@ -202,6 +236,8 @@ private:
 
         // Récupération automatique et sécurisée de la taille réelle en pixels physiques
         QSize pixelSize = renderTarget()->pixelSize();
+
+        fire_height = pixelSize.height();
 
         fire_matrix_width = pixelSize.width();
         fire_matrix_height = fire_height;
@@ -293,7 +329,7 @@ private:
             QRhiTexture::RGBA8,
             img.size(),
             1,
-            QRhiTexture::UsedWithLoadStore | QRhiTexture::UsedWithLoadStore// <-- Obligatoire pour imageLoad/imageStore
+            QRhiTexture::UsedWithLoadStore// <-- Obligatoire pour imageLoad/imageStore
             );
 
         if (!doom_logo_texture->create()) {

@@ -39,7 +39,9 @@ void main() {
         return;
     }
 
-    vec4 doom_logo_color = imageLoad(doom_logo, ivec2(x,y) );
+    ivec2 logo_size = imageSize(doom_logo);
+
+    vec4 doom_logo_color =  vec4 (imageLoad(doom_logo, ivec2(x,y) ).xyz,0.);
 
     vec4 color = vec4(0.0, 0.0, 0.0, 1.0);
 
@@ -55,11 +57,11 @@ void main() {
 
     int row =int( floor ( ( float(x) / float(scale_x) ) ) );
 
-    int column =int( floor (( float(yy) / float(scale_y) ) ) );
+    int column =int( floor (( float(y) / float(scale_y) ) ) );
 
     uint fire_height = size_y * scale_y;
 
-    if ( yy < fire_height)
+    //if ( y < fire_height)
     {
 
         /*
@@ -71,7 +73,7 @@ void main() {
         color = uint_to_rgba( fire_matrix[2 + x + yy * size_x ] );
         */
 
-        color = uint_to_rgba(  palettes[ fire_matrix[ 4 + row + column * size_x ] ] ) * vec4( pow( 1. - yy / float(fire_height - 1.) , 1.1 ) ) ;
+        color = uint_to_rgba(  palettes[ palette_index * 37 +  fire_matrix[ 4 + row + column * size_x ] ] ); // * vec4( pow( 1. - y / float(fire_height - 1) , 1 ) ) ;
     }
 
      imageStore(outputImage,ivec2(x ,y) , doom_logo_color + color);
