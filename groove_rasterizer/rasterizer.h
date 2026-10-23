@@ -87,7 +87,7 @@ private:
     {
         for(size_t x = 0 ; x < fire_matrix_width; ++x) {
             for (size_t y = 1; y < fire_matrix_height ; ++y) {
-                spread_fire(2 + y * fire_matrix_width + x);
+                spread_fire(4 + y * fire_matrix_width + x);
             }
         }
 
@@ -95,6 +95,8 @@ private:
 
     inline void spread_fire(size_t from) {
          uint32_t rand = static_cast<uint32_t>(std::round((static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX) ) * 3.0f)) & 3;
+
+
         fire_matrix[from] = fire_matrix[from - fire_matrix_width] + (rand & 1) ;
     }
 
@@ -183,6 +185,10 @@ private:
 
     size_t palette_index = 0;
 
+
+    size_t scale_x = 10;
+    size_t scale_y = 10;
+
     protected:
 
     void initialize(QRhiCommandBuffer *cb) override
@@ -195,16 +201,17 @@ private:
         fire_matrix_height = fire_height;
 
         // On réserve la taille : 2 emplacements (pour X et Y) + la taille du tableau 2D linéarisé
-        fire_matrix.resize( 2 + fire_matrix_width * fire_height, 0);
+        fire_matrix.resize( 4 + fire_matrix_width * fire_height, 0);
 
-        fire_matrix[0] = fire_matrix_width;
+        fire_matrix[0] = fire_matrix_width ;
         fire_matrix[1] = fire_matrix_height;
-
+        fire_matrix[2] = scale_x;
+        fire_matrix[3] = scale_y;
 
 
         for(size_t x = 0 ; x < fire_matrix_width; ++x)
         {
-            fire_matrix[2 + x] = palette_index * fire_matrix_height;
+            fire_matrix[4 + x] = palette_index * fire_matrix_height;
         }
 
          m_rhi = rhi();

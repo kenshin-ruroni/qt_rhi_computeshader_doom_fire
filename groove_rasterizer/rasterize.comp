@@ -41,10 +41,20 @@ void main() {
     vec4 color = vec4(0.0, 0.0, 0.0, 1.0);
 
     uint palette_index = 0;
-    uint size_y  = fire_matrix[1];
+
     uint size_x = fire_matrix[0];
+    uint size_y  = fire_matrix[1];
+
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
     uint yy =  (size.y - 1 ) - y;
-    if ( yy < size_y )
+
+    int row =int( ( float(x) / float(scale_x) ) );
+
+    int column =int( ( float(yy) / float(scale_y) ) );
+
+    if ( yy < size_y * scale_y)
     {
 
         /*
@@ -56,7 +66,7 @@ void main() {
         color = uint_to_rgba( fire_matrix[2 + x + yy * size_x ] );
         */
 
-        color = uint_to_rgba(  palettes[fire_matrix[2 + x + yy * size_x ]] );
+        color = uint_to_rgba(  palettes[ fire_matrix[ 4 + row + column * size_x ] ] );
     }
 
      imageStore(outputImage,ivec2(x ,y) , color);
