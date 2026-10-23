@@ -26,6 +26,11 @@ qt_add_executable(${PROJECT_NAME}
     rasterize.comp
 )
 
+target_sources(grooverasterizer
+    PRIVATE
+        images.qrc
+)
+
 
 
 set(COMPUTE_SRC "${CMAKE_CURRENT_SOURCE_DIR}/rasterize.comp")

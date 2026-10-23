@@ -82,6 +82,19 @@ public:
 
 private:
 
+    /*
+     * https://github.com/StanislavPetrovV/DOOM-Fire-Algorithm
+     *
+     */
+
+    inline void spread_fire(size_t from) {
+
+        uint32_t m = static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX) * 20.f;
+
+         uint32_t rand = static_cast<uint32_t>(std::round((static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX) ) * m )) & 11;
+
+        fire_matrix[from] = (fire_matrix[from - fire_matrix_width] + rand  )  % 37 ;
+    }
 
     inline void update_fire_matrix()
     {
@@ -91,13 +104,6 @@ private:
             }
         }
 
-    }
-
-    inline void spread_fire(size_t from) {
-         uint32_t rand = static_cast<uint32_t>(std::round((static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX) ) * 3.0f)) & 3;
-
-
-        fire_matrix[from] = fire_matrix[from - fire_matrix_width] + (rand & 1) ;
     }
 
     QShader getShader(const QString &resourcePath) {
@@ -145,7 +151,7 @@ private:
 
     QRhiShaderResourceBindings *m_render_to_texture_bindings;
 
-
+    QRhiTexture *doom_logo_texture = nullptr;
 
     QRhiSwapChain *swapChain;
     QRhiRenderPassDescriptor *rp;
@@ -186,8 +192,8 @@ private:
     size_t palette_index = 0;
 
 
-    size_t scale_x = 10;
-    size_t scale_y = 10;
+    size_t scale_x = 12;
+    size_t scale_y = 12;
 
     protected:
 
@@ -279,6 +285,31 @@ private:
             qFatal()<<"unable to create custom render target ";
         }
 
+        QImage img(":/images/doom_logo.png");
+        img = img.convertToFormat(QImage::Format_RGBA8888); // Format correspondant à rgba8 en GLSL
+
+        // 2. Allouer la texture QRhi
+        doom_logo_texture = m_rhi->newTexture(
+            QRhiTexture::RGBA8,
+            img.size(),
+            1,
+            QRhiTexture::UsedWithLoadStore | QRhiTexture::UsedWithLoadStore// <-- Obligatoire pour imageLoad/imageStore
+            );
+
+        if (!doom_logo_texture->create()) {
+            qFatal("Impossible de créer la texture à partir du logo doom.");
+        }
+
+        // 3. Téléverser les pixels CPU vers la mémoire GPU
+        QRhiResourceUpdateBatch *upload_doom_logo_Batch = m_rhi->nextResourceUpdateBatch();
+
+        QRhiTextureSubresourceUploadDescription doom_logo_resource_updload_desc(img);
+
+        QRhiTextureUploadDescription uploadDesc(QRhiTextureUploadEntry(0,0,doom_logo_resource_updload_desc));
+        upload_doom_logo_Batch->uploadTexture(doom_logo_texture, uploadDesc);
+
+        cb->resourceUpdate(upload_doom_logo_Batch); // Validation immédiate
+
         // Create resource bindings
         m_compute_pass_bindings = m_rhi->newShaderResourceBindings();
         m_compute_pass_bindings->setBindings(
@@ -297,11 +328,22 @@ private:
                      compute_texture_out,                          // The QRhiTexture
                      0
                      )
+             },
+             {
+                 QRhiShaderResourceBinding::imageLoadStore(
+                     6,                                      // Correspond au binding = 6 en GLSL
+                     QRhiShaderResourceBinding::ComputeStage, // Visible par le Compute Shader
+                     doom_logo_texture,                         // doom logo as image2d
+                     0                                       // Niveau de Mipmap (0 = base)
+                     )
              }
         });
 
 
-        m_compute_pass_bindings->create();
+        if ( !m_compute_pass_bindings->create() )
+        {
+            qFatal("Impossible de créer la compute shader pass.");
+        }
 
         m_computePipeline = m_rhi->newComputePipeline();
 
@@ -416,18 +458,6 @@ private:
         resourceUpdates->uploadStaticBuffer(m_render_to_texture_vertex_buffer, quadVertices);
         cb->resourceUpdate(resourceUpdates);
 
-        /*
-        QImage img(QStringLiteral("wallpaperflare.com_wallpaper.jpg"));
-        if (img.isNull()) {
-            qWarning() << "Impossible de charger le fichier PNG !";
-            return;
-        }
-        rgbaImg = img.convertToFormat(QImage::Format_RGBA8888_Premultiplied).scaled(size.rwidth(),size.rheight(),Qt::AspectRatioMode::KeepAspectRatio).flipped();
-        // QRhi nécessite un format de pixels standardisé.
-        //convertToFormat(QImage::Format_RGBA8888) garantit la compatibilité avec QRhiTexture::RGBA8
-
-
-        rgbaImg.save("rscaled.png");*/
 
     }
 

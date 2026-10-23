@@ -15,6 +15,7 @@ layout(std430, binding = 1) buffer FireMatrixSSBO {
 
 // Output image
 layout(binding = 5,rgba8  ) uniform coherent image2D outputImage;
+layout(binding = 6, rgba8 ) uniform coherent image2D doom_logo;
 
 vec4 uint_to_rgba(uint i)
 {
@@ -38,6 +39,8 @@ void main() {
         return;
     }
 
+    vec4 doom_logo_color = imageLoad(doom_logo, ivec2(x,y) );
+
     vec4 color = vec4(0.0, 0.0, 0.0, 1.0);
 
     uint palette_index = 0;
@@ -50,11 +53,13 @@ void main() {
 
     uint yy =  (size.y - 1 ) - y;
 
-    int row =int( ( float(x) / float(scale_x) ) );
+    int row =int( floor ( ( float(x) / float(scale_x) ) ) );
 
-    int column =int( ( float(yy) / float(scale_y) ) );
+    int column =int( floor (( float(yy) / float(scale_y) ) ) );
 
-    if ( yy < size_y * scale_y)
+    uint fire_height = size_y * scale_y;
+
+    if ( yy < fire_height)
     {
 
         /*
@@ -66,9 +71,9 @@ void main() {
         color = uint_to_rgba( fire_matrix[2 + x + yy * size_x ] );
         */
 
-        color = uint_to_rgba(  palettes[ fire_matrix[ 4 + row + column * size_x ] ] );
+        color = uint_to_rgba(  palettes[ fire_matrix[ 4 + row + column * size_x ] ] ) * vec4( pow( 1. - yy / float(fire_height - 1.) , 1.1 ) ) ;
     }
 
-     imageStore(outputImage,ivec2(x ,y) , color);
+     imageStore(outputImage,ivec2(x ,y) , doom_logo_color + color);
 
 }
