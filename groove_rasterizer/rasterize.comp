@@ -55,25 +55,18 @@ void main() {
 
     vec4 color = vec4(0.0, 0.0, 0.0, 1.0);
 
-
-
     uint size_x = fire_matrix[0];
     uint size_y  = fire_matrix[1];
 
     uint scale_x = fire_matrix[2];
     uint scale_y = fire_matrix[3];
 
-    uint palette_index = fire_matrix[4]; // uint(random_float);
-    uint palette_size = fire_matrix[5];
-
-
-
     int row =int( floor ( ( float(x) / float(scale_x) ) ) );
 
     int column =int( floor (( float(yy) / float(scale_y) ) ) );
 
 
-    vec4 fire_color = uint_to_rgba(  palettes[ palette_index * palette_size +  fire_matrix[ 6 + row + column * size_x ] ] ); // * vec4( pow( 1. - y / float(fire_height - 1) , 1 ) ) ;
+    vec4 fire_color = uint_to_rgba(  palettes[ fire_matrix[ 4 + row + column * size_x ] ] ); // * vec4( pow( 1. - y / float(fire_height - 1) , 1 ) ) ;
 
 
      imageStore(outputImage,ivec2(x ,yy) , fire_color + doom_logo_color );

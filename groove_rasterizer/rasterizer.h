@@ -258,17 +258,24 @@ private:
         {
             for (size_t y = 1; y < fire_matrix_height ; ++y)
             {
-                uint32_t color_index = fire_matrix[ 6 + x + fire_matrix_width * y];
+                uint32_t color_index = fire_matrix[ 4 + x + fire_matrix_width * y];
 
                 if ( color_index != last_index  )
                 {
                     uint32_t rnd = distrib(gen);
                     uint32_t  new_index = first_index +  ( color_index + rnd % uint32_t(max_rnd - 1) ) % palette_size ;
                     size_t new_x = (x +  rnd - 2 ) % fire_matrix_width;
-                    fire_matrix[ 6 + new_x +  fire_matrix_width * ( y - 1 )  ] = new_index ;
+                    fire_matrix[ 4 + new_x +  fire_matrix_width * ( y - 1 )  ] = new_index ;
                 }
                else{
-                    fire_matrix[ 6 + x  +  fire_matrix_width * ( y - 1) ] =  last_index ;
+                    float rnd = float(distrib(gen) * 100 )/3.;
+                    if ( rnd < .1f)
+                    {
+                        fire_matrix[ 4 + x  +  fire_matrix_width * ( y - 1) ] =  0 ;
+                    }
+                    else{
+                        fire_matrix[ 4 + x  +  fire_matrix_width * ( y - 1) ] =  last_index ;
+                    }
                }
             }
         }
@@ -358,7 +365,7 @@ private:
 
     size_t fire_height = 37;
 
-    size_t palette_index = 2;
+    size_t palette_index = 3;
 
 
     size_t scale_x = 2;
@@ -383,19 +390,18 @@ private:
         fire_matrix_height = fire_height;
 
         // On réserve la taille : 2 emplacements (pour X et Y) + la taille du tableau 2D linéarisé
-        fire_matrix.resize( 6 + fire_matrix_width * fire_height, 0);
+        fire_matrix.resize( 4 + fire_matrix_width * fire_height, 0);
 
         fire_matrix[0] = fire_matrix_width ;
         fire_matrix[1] = fire_matrix_height;
         fire_matrix[2] = scale_x;
         fire_matrix[3] = scale_y;
-        fire_matrix[4] = palette_index;
-        fire_matrix[5] = palette_size;
+
 
 
         for(size_t x = 0 ; x < fire_matrix_width; ++x)
         {
-            fire_matrix[6 + x] =  palette_index * palette_size ;
+            fire_matrix[4 + x] =  palette_index * palette_size ;
         }
 
          m_rhi = rhi();
