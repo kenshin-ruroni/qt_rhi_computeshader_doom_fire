@@ -1,4 +1,4 @@
-doom fire algo with Qt RHI Vulkan vendor with compute shader and render to texture
+doom fire algo with Qt RHI (Vulkan vendor) with compute shader and render to texture  based on https://github.com/StanislavPetrovV/DOOM-Fire-Algorithm/tree/main
 
 ![Texte alternatif](groove_rasterizer/doom_fire_red.png)
 
