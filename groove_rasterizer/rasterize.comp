@@ -19,13 +19,15 @@ layout(binding = 6, rgba8 ) uniform coherent image2D doom_logo;
 
 vec4 uint_to_rgba(uint i)
 {
-    // Dépaquetage au format inversé (AABBGGRR) provoqué par le Little-Endian du GPU
-    float a = float(i & 0xFFu) / 255.0;         // Le rouge est maintenant tout à droite
-    float b = float((i >> 8) & 0xFFu) / 255.0;  // Le vert est au milieu
-    float g = float((i >> 16) & 0xFFu) / 255.0; // Le bleu est ici
-    float r = float((i >> 24) & 0xFFu) / 255.0; // L'alpha est tout à gauche
-
+    float a = float(i & 0xFFu) / 255.0;
+    float b = float((i >> 8) & 0xFFu) / 255.0;
+    float g = float((i >> 16) & 0xFFu) / 255.0;
+    float r = float((i >> 24) & 0xFFu) / 255.0;
     return vec4(r, g, b, a);
+}
+
+float random(uvec2 st) {
+    return fract(sin(dot(vec2(st), vec2(12.9898, 78.233))) * 43758.5453123);
 }
 
 void main() {
@@ -39,13 +41,21 @@ void main() {
         return;
     }
 
+    uint yy =   size.y - 1  - y;
+
+
+    uvec2 seed = uvec2(x, yy);
+
+    // Génère un float entre 0.0 et 4.0
+    float random_float = random(seed) * 4.0;
+
     ivec2 logo_size = imageSize(doom_logo);
 
-    vec4 doom_logo_color =  vec4 (imageLoad(doom_logo, ivec2(x,y) ).xyz,0.);
+    vec4 doom_logo_color =  vec4 (imageLoad(doom_logo, ivec2(x,yy) ).xyz,0.);
 
     vec4 color = vec4(0.0, 0.0, 0.0, 1.0);
 
-    uint palette_index = 0;
+
 
     uint size_x = fire_matrix[0];
     uint size_y  = fire_matrix[1];
@@ -53,29 +63,19 @@ void main() {
     uint scale_x = fire_matrix[2];
     uint scale_y = fire_matrix[3];
 
-    uint yy =  (size.y - 1 ) - y;
+    uint palette_index = fire_matrix[4]; // uint(random_float);
+    uint palette_size = fire_matrix[5];
+
+
 
     int row =int( floor ( ( float(x) / float(scale_x) ) ) );
 
-    int column =int( floor (( float(y) / float(scale_y) ) ) );
-
-    uint fire_height = size_y * scale_y;
-
-    //if ( y < fire_height)
-    {
-
-        /*
-        uint index_color = palette_index * size_y + yy;
+    int column =int( floor (( float(yy) / float(scale_y) ) ) );
 
 
-            fire_matrix[ 2 + x + yy * size_x ] = palettes[ index_color ];
+    vec4 fire_color = uint_to_rgba(  palettes[ palette_index * palette_size +  fire_matrix[ 6 + row + column * size_x ] ] ); // * vec4( pow( 1. - y / float(fire_height - 1) , 1 ) ) ;
 
-        color = uint_to_rgba( fire_matrix[2 + x + yy * size_x ] );
-        */
 
-        color = uint_to_rgba(  palettes[ palette_index * 37 +  fire_matrix[ 4 + row + column * size_x ] ] ); // * vec4( pow( 1. - y / float(fire_height - 1) , 1 ) ) ;
-    }
-
-     imageStore(outputImage,ivec2(x ,y) , doom_logo_color + color);
+     imageStore(outputImage,ivec2(x ,yy) , fire_color + doom_logo_color );
 
 }

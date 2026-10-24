@@ -84,13 +84,144 @@ public:
 
 private:
 
+    const std::vector<uint32_t> RED_PALETTE_COLORS = {
+        0xFFFFFFFF,
+        0xFFFF00FF,
+        0xFFA500FF,
+        0xFF0000FF,
+        0x000000FF
+    };
+
+    // Palette 2 : Green (Dark Green -> Forest Green -> Bright Green -> Lime -> Mint/White)
+    const std::vector<uint32_t> GREEN_PALETTE_COLORS =
+    {
+        0xE0FFE0FF,
+        0x7FFF00FF,
+        0x00CC00FF,
+        0x005500FF,
+        0x000000FF
+    };
+
+
+    // Palette 3 : Purple (Du plus lumineux/vif au plus sombre)
+    const std::vector<uint32_t> PURPLE_PALETTE_COLORS = {
+        0xF0D0FFFF,
+        0xD000FFFF,
+        0x8A00CFFF,
+        0x4A006FFF,
+        0x000000FF
+    };
+
+    // Palette 4 : Blue (Du plus lumineux au plus sombre)
+    const std::vector<uint32_t> BLUE_PALETTE_COLORS = {
+        0xE0FFFFFF,
+        0x007FFFFF,
+        0x0000FFFF,
+        0x00008BFF,
+        0x000000FF
+    };
+
+    const int STEPS_BETWEEN_COLORS = 20;
+
+    uint32_t lerpColor32(uint32_t c1, uint32_t c2, float t)
+    {
+
+        float r1 = (c1 >> 24) & 0xFF;
+        float g1 = (c1 >> 16) & 0xFF;
+        float b1 = (c1 >> 8)  & 0xFF;
+        float a1 = c1 & 0xFF;
+
+        float r2 = (c2 >> 24) & 0xFF;
+        float g2 = (c2 >> 16) & 0xFF;
+        float b2 = (c2 >> 8)  & 0xFF;
+        float a2 = c2 & 0xFF;
+
+
+        uint8_t r = static_cast<uint8_t>(r1 + t * (r2 - r1));
+        uint8_t g = static_cast<uint8_t>(g1 + t * (g2 - g1));
+        uint8_t b = static_cast<uint8_t>(b1 + t * (b2 - b1));
+        uint8_t a = static_cast<uint8_t>(a1 + t * (a2 - a1));
+
+
+        return (r << 24) | (g << 16) | (b << 8) | a;
+    }
+
+    std::vector<uint32_t> palette_with_steps;
+
+    inline void  build_palettes()
+    {
+
+
+        palette_with_steps.resize( 4 *  ( ( RED_PALETTE_COLORS.size() - 1)  * STEPS_BETWEEN_COLORS + RED_PALETTE_COLORS.size() ) );
+
+        size_t k = 0;
+        palette_with_steps[k++] =RED_PALETTE_COLORS[0];
+
+        for (size_t i = 0; i < RED_PALETTE_COLORS.size() - 1; ++i) {
+            uint32_t c1 = RED_PALETTE_COLORS[i];
+            uint32_t c2 = RED_PALETTE_COLORS[i + 1];
+
+            for (int step = 0; step < STEPS_BETWEEN_COLORS; ++step) {
+                float t = float(step+0.5f) / STEPS_BETWEEN_COLORS;
+                palette_with_steps[k++] = lerpColor32(c1, c2, t);
+            }
+            palette_with_steps[k++] = c2;
+        }
+
+         palette_with_steps[k++] =GREEN_PALETTE_COLORS[0];
+        for (size_t i = 0; i < GREEN_PALETTE_COLORS.size() - 1; ++i) {
+            uint32_t c1 = GREEN_PALETTE_COLORS[i];
+            uint32_t c2 = GREEN_PALETTE_COLORS[i + 1];
+
+            for (int step = 0; step < STEPS_BETWEEN_COLORS; ++step) {
+                float t = (step + 0.5f) / STEPS_BETWEEN_COLORS;
+                palette_with_steps[k++] = lerpColor32(c1, c2, t);
+            }
+
+            palette_with_steps[k++] = c2;
+
+        }
+
+        palette_with_steps[k++] =PURPLE_PALETTE_COLORS[0];
+
+        for (size_t i = 0; i < PURPLE_PALETTE_COLORS.size() - 1; ++i) {
+            uint32_t c1 = PURPLE_PALETTE_COLORS[i];
+            uint32_t c2 = PURPLE_PALETTE_COLORS[i + 1];
+
+            for (int step = 0; step < STEPS_BETWEEN_COLORS; ++step) {
+                float t = (step + 0.5f) / STEPS_BETWEEN_COLORS;
+                palette_with_steps[k++] = lerpColor32(c1, c2, t);
+            }
+
+             palette_with_steps[k++] = c2;
+
+        }
+
+        palette_with_steps[k++] =BLUE_PALETTE_COLORS[0];
+
+        for (size_t i = 0; i < BLUE_PALETTE_COLORS.size() - 1; ++i) {
+            uint32_t c1 = BLUE_PALETTE_COLORS[i];
+            uint32_t c2 = BLUE_PALETTE_COLORS[i + 1];
+
+            for (int step = 0; step < STEPS_BETWEEN_COLORS; ++step) {
+                float t = (step + 0.5f) / STEPS_BETWEEN_COLORS;
+                palette_with_steps[k++] = lerpColor32(c1, c2, t);
+            }
+
+             palette_with_steps[k++] = c2;
+
+        }
+
+    }
+
+
 
     std::random_device rd;
 
     // 2. Choisir un moteur de génération (Mersenne Twister 64-bit est excellent)
     std::mt19937 gen = std::mt19937(rd());
 
-    size_t max_rnd = 4;
+    size_t max_rnd = 3;
     // 3. Définir la distribution uniforme entre 0 et 3 inclus [0, 3]
     std::uniform_int_distribution<int> distrib = std::uniform_int_distribution<int>(0, max_rnd);
 
@@ -112,7 +243,7 @@ private:
     {
         for(size_t x = 0 ; x < fire_matrix_width; ++x) {
             for (size_t y = 1; y < fire_matrix_height ; ++y) {
-                spread_fire(4 + y * fire_matrix_width + x);
+                spread_fire(5 + y * fire_matrix_width + x);
             }
         }
 
@@ -120,20 +251,24 @@ private:
 
     inline void update_fire_matrix()
     {
+
+        uint32_t first_index =  palette_index  * palette_size ;
+        uint32_t last_index = first_index + palette_size - 1;
         for(size_t x = 0 ; x < fire_matrix_width; ++x)
         {
             for (size_t y = 1; y < fire_matrix_height ; ++y)
             {
-                uint32_t color_index = fire_matrix[4 + x + fire_matrix_width * y];
-                uint rnd = distrib(gen); // nombre entre 0 et 3
+                uint32_t color_index = fire_matrix[ 6 + x + fire_matrix_width * y];
 
-               // qDebug("%i ",(int) ( (x - rnd + 1) % fire_matrix_width ) );
-                if ( color_index != 36)
+                if ( color_index != last_index  )
                 {
-                    fire_matrix[ 4 + (x - rnd + 1) % fire_matrix_width +  fire_matrix_width * (y - 1) ] = (color_index - rnd % (max_rnd - 1)) % 37;
+                    uint32_t rnd = distrib(gen);
+                    uint32_t  new_index = first_index +  ( color_index + rnd % uint32_t(max_rnd - 1) ) % palette_size ;
+                    size_t new_x = (x +  rnd - 2 ) % fire_matrix_width;
+                    fire_matrix[ 6 + new_x +  fire_matrix_width * ( y - 1 )  ] = new_index ;
                 }
                else{
-                   fire_matrix[ 4 + x  +  fire_matrix_width * (y - 1) ] = 0;
+                    fire_matrix[ 6 + x  +  fire_matrix_width * ( y - 1) ] =  last_index ;
                }
             }
         }
@@ -223,37 +358,44 @@ private:
 
     size_t fire_height = 37;
 
-    size_t palette_index = 0;
+    size_t palette_index = 2;
 
 
-    size_t scale_x = 4;
-    size_t scale_y = 4;
+    size_t scale_x = 2;
+    size_t scale_y = 2;
+
+    size_t palette_size ;
 
     protected:
 
     void initialize(QRhiCommandBuffer *cb) override
     {
 
-        // Récupération automatique et sécurisée de la taille réelle en pixels physiques
+        palette_size = (RED_PALETTE_COLORS.size() - 1) * STEPS_BETWEEN_COLORS + RED_PALETTE_COLORS.size();
+
+        build_palettes();
+
         QSize pixelSize = renderTarget()->pixelSize();
 
-        fire_height = pixelSize.height();
+        fire_height = pixelSize.height() * 2/4;
 
         fire_matrix_width = pixelSize.width();
         fire_matrix_height = fire_height;
 
         // On réserve la taille : 2 emplacements (pour X et Y) + la taille du tableau 2D linéarisé
-        fire_matrix.resize( 4 + fire_matrix_width * fire_height, 0);
+        fire_matrix.resize( 6 + fire_matrix_width * fire_height, 0);
 
         fire_matrix[0] = fire_matrix_width ;
         fire_matrix[1] = fire_matrix_height;
         fire_matrix[2] = scale_x;
         fire_matrix[3] = scale_y;
+        fire_matrix[4] = palette_index;
+        fire_matrix[5] = palette_size;
 
 
         for(size_t x = 0 ; x < fire_matrix_width; ++x)
         {
-            fire_matrix[4 + x] = palette_index * fire_matrix_height;
+            fire_matrix[6 + x] =  palette_index * palette_size ;
         }
 
          m_rhi = rhi();
@@ -287,7 +429,7 @@ private:
         palettes_ssbo_buffer = m_rhi->newBuffer(
             QRhiBuffer::Static,
             QRhiBuffer::StorageBuffer, // Type correspond au layout(std430) buffer du shader
-            palettes.size() * sizeof(uint32_t)
+            palette_with_steps.size() * sizeof(uint32_t)
             );
 
         if (!palettes_ssbo_buffer->create()) {
@@ -296,7 +438,7 @@ private:
 
         // 2. Téléversement immédiat des données vers le GPU
         QRhiResourceUpdateBatch *initUpdates = m_rhi->nextResourceUpdateBatch();
-        initUpdates->uploadStaticBuffer(palettes_ssbo_buffer, palettes.data());
+        initUpdates->uploadStaticBuffer(palettes_ssbo_buffer, palette_with_steps.data());
         cb->resourceUpdate(initUpdates); // Soumission de la mise à jour
 
         compute_texture_out = m_rhi->newTexture(
@@ -543,7 +685,7 @@ private:
             };
 #endif
 
-            QRhiResourceUpdateBatch *nextBatch = m_rhi->nextResourceUpdateBatch();
+            QRhiResourceUpdateBatch *render_to_texture_batch = m_rhi->nextResourceUpdateBatch();
 
             // Clear output texture (if needed)
             QRhiRenderTarget *rt = renderTarget();
@@ -552,7 +694,7 @@ private:
             // Déclaration stricte du Viewport via le constructeur QRhiViewport
             cb->setViewport(QRhiViewport(0.0f, 0.0f, float(currentPixelSize.width()), float(currentPixelSize.height())));
 
-            cb->beginPass( rt, clearColor, { 1.0f, 0 },nextBatch);
+            cb->beginPass( rt, clearColor, { 1.0f, 0 },render_to_texture_batch);
 
 
            // nextBatch->uploadTexture(compute_texture_out, rgbaImg);
@@ -566,7 +708,7 @@ private:
 
 
 
-          cb->endPass();
+          cb->endPass(render_to_texture_batch);
 
           update();
 
