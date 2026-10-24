@@ -26,9 +26,7 @@ vec4 uint_to_rgba(uint i)
     return vec4(r, g, b, a);
 }
 
-float random(uvec2 st) {
-    return fract(sin(dot(vec2(st), vec2(12.9898, 78.233))) * 43758.5453123);
-}
+
 
 void main() {
     // Calculate pixel coordinates
@@ -45,9 +43,6 @@ void main() {
 
 
     uvec2 seed = uvec2(x, yy);
-
-    // Génère un float entre 0.0 et 4.0
-    float random_float = random(seed) * 4.0;
 
     ivec2 logo_size = imageSize(doom_logo);
 
@@ -69,6 +64,6 @@ void main() {
     vec4 fire_color = uint_to_rgba(  palettes[ fire_matrix[ 4 + row + column * size_x ] ] ); // * vec4( pow( 1. - y / float(fire_height - 1) , 1 ) ) ;
 
 
-     imageStore(outputImage,ivec2(x ,yy) , fire_color + doom_logo_color );
+     imageStore(outputImage,ivec2(x ,yy) , fire_color + doom_logo_color  );
 
 }

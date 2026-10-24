@@ -267,15 +267,11 @@ private:
                     size_t new_x = (x +  rnd - 2 ) % fire_matrix_width;
                     fire_matrix[ 4 + new_x +  fire_matrix_width * ( y - 1 )  ] = new_index ;
                 }
-               else{
-                    float rnd = float(distrib(gen) * 100 )/3.;
-                    if ( rnd < .1f)
-                    {
-                        fire_matrix[ 4 + x  +  fire_matrix_width * ( y - 1) ] =  0 ;
-                    }
-                    else{
+               else
+               {
+
                         fire_matrix[ 4 + x  +  fire_matrix_width * ( y - 1) ] =  last_index ;
-                    }
+
                }
             }
         }
