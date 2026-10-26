@@ -10,8 +10,8 @@ set(CMAKE_CXX_STANDARD 26)
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
-find_package(Qt6 REQUIRED COMPONENTS Core Quick Gui Widgets GuiPrivate QuickWidgets ShaderTools )
+find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets GuiPrivate ShaderTools )
 find_package(Qt6Quick3D REQUIRED)
 
 qt_standard_project_setup(REQUIRES 6.11)
@@ -24,11 +24,15 @@ qt_add_executable(${PROJECT_NAME}
     mainwindow.h mainwindow.cpp
     mainwindow.ui
     rasterize.comp
+    sound_system.cpp
+    sound_system.h
+    dr_libs_impl.cpp
 )
 
 target_sources(grooverasterizer
     PRIVATE
         images.qrc
+        music.qrc
 )
 
 
@@ -66,12 +70,10 @@ qt_add_shaders(${PROJECT_NAME} "my_shaders"
 # Link libraries
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::Core
-    Qt6::Quick
     Qt6::Gui
-    Qt6::Quick3D
     Qt6::GuiPrivate
-    Qt6::QuickWidgets
-     Qt6::Widgets
+    Qt6::Widgets
+    Qt6::Multimedia
 )
 
 include_directories( ${CMAKE_SOURCE_DIR} )
@@ -88,9 +90,7 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
     WIN32_EXECUTABLE TRUE
 )
 
-target_link_libraries(${PROJECT_NAME}
-    PRIVATE Qt6::Quick
-)
+
 
 qt_finalize_executable(${PROJECT_NAME})
 

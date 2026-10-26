@@ -64,6 +64,6 @@ void main() {
     vec4 fire_color = uint_to_rgba(  palettes[ fire_matrix[ 4 + row + column * size_x ] ] ); // * vec4( pow( 1. - y / float(fire_height - 1) , 1 ) ) ;
 
 
-     imageStore(outputImage,ivec2(x ,yy) , fire_color + doom_logo_color  );
+     imageStore(outputImage,ivec2(x ,yy) , fire_color +  10. * fire_color * doom_logo_color + (1.15  - sin(x/size.x + yy/size.y ) )*  doom_logo_color);
 
 }

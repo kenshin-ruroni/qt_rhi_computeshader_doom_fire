@@ -1,0 +1,9 @@
+<RCC>
+    <qresource prefix="/music"/>
+    <qresource prefix="/">
+        <file>music/01. At Doom's Gate.mp3</file>
+        <file>music/03. Dark Halls.mp3</file>
+        <file>music/05. Suspense.mp3</file>
+        <file>music/17. Nobody Told Me About Id.mp3</file>
+    </qresource>
+</RCC>

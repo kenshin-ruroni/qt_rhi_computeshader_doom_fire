@@ -1,9 +1,9 @@
 #include <QApplication>
 #include <QVulkanInstance>
 #include <private/qrhivulkan_p.h>
-#include <QQuickWindow>
 #include <QTimer>
 #include <QElapsedTimer>
+#include "sound_system.h"
 
  static QVulkanInstance inst;
 
@@ -13,7 +13,11 @@
 
 int main(int argc, char *argv[])
 {
+
+    sound_system soundsystem;
+
     QApplication a(argc, argv);
+
 
 
     // Demander une configuration de surface standard propre pour Vulkan/RHI
