@@ -2,6 +2,10 @@
 
 layout(local_size_x = 32, local_size_y = 32, local_size_z = 1) in;
 
+layout(std140, binding = 2) uniform TimeBuffer {
+    float time; // Reçoit le temps écoulé en secondes (converti de double en float)
+};
+
 layout(std430, binding = 0) readonly buffer PaletteSSBO {
     // 4 tableaux de 37 valeurs uint compactes (alignement parfait à 4 octets)
     uint palettes[];
@@ -26,9 +30,102 @@ vec4 uint_to_rgba(uint i)
     return vec4(r, g, b, a);
 }
 
+float pcg_hash(uint seed) {
+    uint state = seed * 747796405u + 289133645u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return float((word >> 22u) ^ word) / 4294967295.0;
+}
 
+// Fonction pour générer un effet plasma multi-ondes (valeur retournée entre -1.0 et 1.0)
+float computePlasma(float x, float y, float t) {
+    // Onde 1 : lignes verticales ondulantes
+    float v1 = sin(x * 0.005 + t * .02);
+    // Onde 2 : distorsion sinusoïdale oblique
+    float v2 = sin(0.05 * (x * sin(t/2.0) + y * cos(t/30.0)) + t);
+    // Onde 3 : ondes circulaires / radiales centrées
+    float cx = x + 100.0 * sin(t / 5.0);
+    float cy = y + 250.0 * cos(t / 3.0);
+    float v3 = sin(sqrt(cx*cx + cy*cy) * 0.003 + t);
+
+    return (v1 + v2 + v3) / 3.0;
+}
 
 void main() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+
+    ivec2 size = imageSize(outputImage);
+
+    if (x >= uint(size.x) || y >= uint(size.y)) {
+        return;
+    }
+
+    uint yy = size.y - 1 - y;
+
+    uint seed = x + yy * uint(size.x) + uint( cos(  time * 0.05 + 0.01 ) * 1000.0);
+    float rnd = pcg_hash(seed);
+
+    uint seed2 = x + yy * uint(size.x) + uint(5. * sin(  time * 0.05 ) );
+    float rnd2 = pcg_hash(seed2);
+
+    // --- 1. CALCUL DU PLASMA DE BASE ---
+    float plasma = computePlasma(float(x), float(yy), time);
+
+    // --- 2. DEFORMATION GEOMETRIQUE DU FEU ---
+    // On utilise la valeur du plasma pour créer un décalage horizontal (en pixels)
+    // L'intensité du décalage (ici 15.0 pixels max) simule la distorsion par la chaleur
+    float fire_distortion = plasma * 25.0;
+
+    // Application de la distorsion sur l'axe X (row) de manière fluide
+    uint size_x = fire_matrix[0];
+    uint size_y = fire_matrix[1];
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
+    // Calcul de la colonne (X) déformée, avec verrouillage (clamp) pour ne pas déborder de la matrice
+    float distorted_x = clamp(float(x) + fire_distortion, 0.0, float(size.x * scale_x - 1));
+
+    int row = int(floor(distorted_x / float(scale_x)));
+    int column = int(floor(float(yy) / float(scale_y)));
+
+    // Lecture de la palette avec la coordonnée X distordue
+    vec4 fire_color = uint_to_rgba(palettes[fire_matrix[4 + row + column * size_x]]);
+
+    // --- 3. RENDU DU LOGO AVEC ABERRATION CHROMATIQUE ---
+    // Intensité du décalage RVB modulée
+    int r_offset = int(10.0 * rnd  * sin(0.001 * time * rnd));
+    int b_offset = int(-10.0 * rnd2 *  sin(0.0015 * time * rnd2));
+
+    // Lecture du logo (on applique également une légère distorsion du plasma sur le logo pour la cohérence)
+    float logo_r = imageLoad(doom_logo, ivec2(clamp(int(x) + r_offset + int(fire_distortion * 0.5), 0, size.x - 1), int(yy))).r;
+    float logo_g = imageLoad(doom_logo, ivec2(clamp(int(x) + int(fire_distortion * 0.5), 0, size.x - 1),            int(yy))).g;
+    float logo_b = imageLoad(doom_logo, ivec2(clamp(int(x) + b_offset + int(fire_distortion * 0.5), 0, size.x - 1), int(yy))).b;
+
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
+
+    // Colorisation psychédélique du plasma pour le logo
+    vec4 plasma_color;
+    plasma_color.r = 0.5 * sin(plasma * 3.1415 + 0.0001* time) * 0.5 + 0.5;
+    plasma_color.g = 0.25 *  cos(plasma * 3.1415 + time * 0.0005) * 0.5 + 0.5;
+    plasma_color.b = 0.15 * sin(plasma * 3.1415 + time * 0.000115 + 1.5) * 0.5 + 0.5;
+    plasma_color.a = 1.0;
+
+    // --- 4. COMPOSITION FINALE ---
+    float logo_mask = max(max(doom_logo_color.r, doom_logo_color.g), doom_logo_color.b);
+
+    vec4 final_logo_effect = doom_logo_color * 2.0;
+    if (logo_mask > 0.05) {
+        final_logo_effect += plasma_color * 0.7;
+    }
+
+    // Le feu d'arrière-plan ondule désormais de manière organique sous le logo !
+    vec3 final_rgb =fire_color.rgb + 1.5 * (0.1 +  fire_color.rgb) * final_logo_effect.rgb + 1.5  *sin((float(yy)/size.y - rnd)  * time * 0.001) * cos( ((float(x)/size.x )+rnd2) * time * 0.005) * final_logo_effect.rgb;
+
+    imageStore(outputImage, ivec2(int(x), int(yy)), vec4(final_rgb, 0.0));
+}
+
+
+void main_test() {
     // Calculate pixel coordinates
     uint x = gl_GlobalInvocationID.x;
     uint y = gl_GlobalInvocationID.y;
@@ -41,12 +138,28 @@ void main() {
 
     uint yy =   size.y - 1  - y;
 
+    uint seed = x + yy * uint(size.x) + uint( cos( 6.283185307 * time * 0.05 + 0.01 ) * 1000.0);
+    float rnd = pcg_hash(seed);
 
-    uvec2 seed = uvec2(x, yy);
+    uint seed2 = x + yy * uint(size.x) + uint(5000. * sin( 6.283185307 * time * 0.05 ) );
+    float rnd2 = pcg_hash(seed2);
+
+
 
     ivec2 logo_size = imageSize(doom_logo);
 
-    vec4 doom_logo_color =  vec4 (imageLoad(doom_logo, ivec2(x,yy) ).xyz,0.);
+    // --- 1. CONFIGURATION DE L'ABERRATION CHROMATIQUE ---
+    // Intensité du décalage (en pixels) modulée par le temps pour un effet organique
+    int r_offset = int(15.0 *rnd * sin(time  * 6.283185307* 0.15 ));
+    int b_offset = int(-15.0 * rnd2 *  cos(time * 6.283185307* 0.131 ));
+
+    // Lecture déphasée des canaux du logo Doom (Aberration RVB)
+    float logo_r = imageLoad(doom_logo, ivec2(int(x) + r_offset, int(yy))).r;
+    float logo_g = imageLoad(doom_logo, ivec2(int(x),            int(yy))).g;
+    float logo_b = imageLoad(doom_logo, ivec2(int(x) + b_offset, int(yy))).b;
+
+    // Reconstitution du logo avec les couleurs séparées (Alpha à 0 pour le calcul)
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
 
     vec4 color = vec4(0.0, 0.0, 0.0, 1.0);
 
@@ -64,6 +177,5 @@ void main() {
     vec4 fire_color = uint_to_rgba(  palettes[ fire_matrix[ 4 + row + column * size_x ] ] ); // * vec4( pow( 1. - y / float(fire_height - 1) , 1 ) ) ;
 
 
-     imageStore(outputImage,ivec2(x ,yy) , fire_color +  10. * fire_color * doom_logo_color + (1.15  - sin(x/size.x + yy/size.y ) )*  doom_logo_color);
-
+     imageStore(outputImage,ivec2(x ,yy) , fire_color +  12.5  *fire_color * doom_logo_color ); // + 0.5 * (  sin( 6.283185307 * (float(x)/size.x + 100. * rnd) * 0.01 * time) *cos( 6.283185307 *( 100. * rnd2 - float(yy)/size.y) * time)  )   *  doom_logo_color  ) ;
 }

@@ -10,6 +10,7 @@
 #include <QRhiWidget>
 #include <QWindow>
 #include <QVector2D>
+#include <QElapsedTimer>
 #include <QMatrix4x4>
 #include <QFile>
 #include <rhi/qrhi.h>
@@ -317,6 +318,8 @@ private:
 
     QRhiBuffer *fire_matrix_ssbo_buffer;
 
+    QRhiBuffer *time_buffer = nullptr;
+
     QRhiBuffer *palettes_ssbo_buffer = nullptr;
 
     QRhiShaderResourceBindings *m_compute_pass_bindings;
@@ -361,7 +364,7 @@ private:
 
     size_t fire_height = 37;
 
-    size_t palette_index = 3;
+    size_t palette_index = 1;
 
 
     size_t scale_x = 2;
@@ -369,10 +372,15 @@ private:
 
     size_t palette_size ;
 
+    float elapsed_time;
+
+    QElapsedTimer elapsed_timer;
     protected:
 
     void initialize(QRhiCommandBuffer *cb) override
     {
+
+        elapsed_timer.start();
 
         palette_size = (RED_PALETTE_COLORS.size() - 1) * STEPS_BETWEEN_COLORS + RED_PALETTE_COLORS.size();
 
@@ -420,6 +428,15 @@ private:
 
         if (!fire_matrix_ssbo_buffer->create()) {
             qWarning() << "Failed to create ssbo buffer";
+        }
+
+        // Allocation du buffer de la taille stricte de notre structure (4 octets)
+        time_buffer = m_rhi->newBuffer(QRhiBuffer::Dynamic,
+                                        QRhiBuffer::UniformBuffer,
+                                        sizeof(float));
+
+        if (!time_buffer->create()) {
+            qWarning("Échec de la création du Uniform Buffer (Time)");
         }
 
         // 2. Téléversement immédiat des données vers le GPU
@@ -494,6 +511,9 @@ private:
         m_compute_pass_bindings = m_rhi->newShaderResourceBindings();
         m_compute_pass_bindings->setBindings(
         {
+            {
+                    QRhiShaderResourceBinding::uniformBuffer(2, QRhiShaderResourceBinding::ComputeStage, time_buffer)
+            },
             {
                  QRhiShaderResourceBinding::bufferStore(0, QRhiShaderResourceBinding::ComputeStage, palettes_ssbo_buffer)
             },
@@ -644,8 +664,22 @@ private:
 #if DEBUG_COMPUTE_SHADER_RESULT == 1
     QRhiReadbackResult rbResult;
 #endif
+    float elapsedSeconds = 0.;
     void render(QRhiCommandBuffer *cb) override
     {
+
+        elapsedSeconds = static_cast<float>(elapsed_timer.elapsed()) / 1000.0f;
+
+        QRhiResourceUpdateBatch *update_time_batch = m_rhi->nextResourceUpdateBatch();
+
+        // 4. Téléverser la structure CPU directement dans le buffer GPU
+        update_time_batch->updateDynamicBuffer(
+            time_buffer,
+            0,
+            sizeof(float),
+            &elapsedSeconds
+            );
+        cb->resourceUpdate(update_time_batch);
 
         QRhiResourceUpdateBatch *computeBatch = m_rhi->nextResourceUpdateBatch();
         // Update uniform buffer with new data

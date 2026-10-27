@@ -78,12 +78,53 @@ class sound_system : public QObject
 public:
     sound_system(){ start(); };
 
-    inline void play_new_random_track()
+private:
+
+
+
+    float heavyside_function(float t)
     {
+        return static_cast<float>( t < 0.0f ) * 0. + (1.0f - static_cast<float>( t < 0.0f ) ) * 1.0f;
+    }
+    /*
+      d = duration of fade in effect
+    */
+    void apply_logarithmic_fade_in(double fs, QByteArray *samples, size_t start_in_samples = 0, float d_seconds = 10.0f, float k = 2)
+    {
+
+        float dt = 1./fs;
+        float t;
+        size_t duration_in_samples = d_seconds * fs;
+        float factor;
+        for (size_t s = start_in_samples; s < start_in_samples + duration_in_samples;s += 2){
+            t = static_cast<float>(s)*dt;
+            factor = heavyside_function(d_seconds-t)*log(1.f + (std::numbers::e - 1.)* std::pow(t/d_seconds,k) ) + heavyside_function(t-d_seconds);
+           // qDebug()<<t<<" "<<factor;
+            (*samples)[s] = static_cast<int16_t>( (factor * static_cast<float>(static_cast<int16_t>((*samples)[s])) / 32768.0f) * 32767.0f);
+        }
 
     }
 
-private:
+    /*
+      k is power of rise
+      d = duration of fade in effect
+    */
+    void apply_logarithmic_fade_out(double fs,QByteArray *samples, float d_seconds = 10.0f, float k = 2)
+    {
+
+        float dt = 1./fs;
+        float t;
+        size_t duration_in_samples = d_seconds * fs;
+        size_t start_in_samples = samples->size() - duration_in_samples;
+        float factor;
+        for (size_t s = start_in_samples; s < start_in_samples + duration_in_samples; s+= 2){
+            t = static_cast<float>(s)*dt;
+            factor = heavyside_function(d_seconds-t)*( 1. - log(1.f + (std::numbers::e - 1.)* std::pow(t/d_seconds,k) ) );
+           // qDebug()<<t<<" "<<factor;
+            (*samples)[s] = static_cast<int16_t>( (factor * static_cast<float>(static_cast<int16_t>((*samples)[s])) / 32768.0f) * 32767.0f);
+        }
+
+    }
 
      std::random_device rd;  // Source de chaos matérielle (seed)
      std::mt19937 gen = std::mt19937(rd()); // Moteur de rendu de nombres aléatoires (Mersenne Twister)
@@ -425,7 +466,6 @@ private:
 
     inline void load_all_resources()
     {
-        QList<QByteArray> allBuffers;
 
         const QString &prefixPath = QString("../../music");
 
@@ -486,7 +526,8 @@ private:
 
                 if ( ok )
                 {
-
+                    apply_logarithmic_fade_in(new_track.sampleRate,&new_track.pcmData);
+                    apply_logarithmic_fade_out(new_track.sampleRate,&new_track.pcmData);
                     qDebug() << "Ressource chargée :" << absoluteResourcePath
                              << "Taille :" << new_track.pcmData.size() << "octets";
                     new_track.id = all_ids++;
