@@ -21,8 +21,9 @@ layout(std430, binding = 1) buffer FireMatrixSSBO {
 layout(binding = 5,rgba8  ) uniform coherent image2D outputImage;
 layout(binding = 6, rgba8 ) uniform coherent image2D doom_logo;
 
-vec4 uint_to_rgba(uint i)
-{
+
+
+vec4 uint_to_rgba(uint i) {
     float a = float(i & 0xFFu) / 255.0;
     float b = float((i >> 8) & 0xFFu) / 255.0;
     float g = float((i >> 16) & 0xFFu) / 255.0;
@@ -36,21 +37,2434 @@ float pcg_hash(uint seed) {
     return float((word >> 22u) ^ word) / 4294967295.0;
 }
 
-// Fonction pour générer un effet plasma multi-ondes (valeur retournée entre -1.0 et 1.0)
 float computePlasma(float x, float y, float t, float rnd, float rnd2) {
-    // Onde 1 : lignes verticales ondulantes
-    float v1 = sin(x * 0.005 + t * .02);
-    // Onde 2 : distorsion sinusoïdale oblique
-    float v2 = sin(0.05 * (x * sin(t/2.0) + y * cos(t/30.0)) + t);
-    // Onde 3 : ondes circulaires / radiales centrées
-    float cx = x + 500.0 * cos(rnd*t) * sin(t / 5.0);
-    float cy = y + 450.0 * sin(rnd2*t) * cos(t / 3.0);
-    float v3 = sin(sqrt(cx*cx + cy*cy) * 0.003 + t);
-
-    return (v1 + v2 + v3) / 3.0;
+    vec2 p = vec2(x * 0.008, y * 0.004 - t * 0.02);
+    float v1 = sin(p.x + sin(t * 0.5));
+    float v2 = sin(p.y + cos(t * 0.3));
+    float v3 = sin(p.x + p.y + t * 0.1);
+    float v4 = sin(sqrt(p.x * p.x + p.y * p.y) - t * 0.4);
+    float noise = sin(x * 0.05 + y * 0.02) * rnd;
+    return ((v1 + v2 + v3 + v4) / 4.0) * 0.8 + noise * 0.2;
 }
 
+vec2 hash22(vec2 p) {
+    p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+    return fract(sin(p) * 43758.5453123);
+}
+
+float computeSmoothVoronoi(vec2 p, float t) {
+    vec2 n = floor(p);
+    vec2 f = fract(p);
+    float res = 0.0;
+    float falloff = 4.0;
+    for (int j = -2; j <= 2; j++) {
+        for (int i = -2; i <= 2; i++) {
+            vec2 g = vec2(float(i), float(j));
+            vec2 o = hash22(n + g);
+            o = 0.5 + 0.5 * sin(t * 2.0 + o * 6.2831);
+            vec2 r = g + o - f;
+            float d = dot(r, r);
+            res += exp2(-falloff * d);
+        }
+    }
+    return -(1.0 / falloff) * log2(res);
+}
+
+vec2 computeVoronoi(vec2 p, float t) {
+    vec2 n = floor(p);
+    vec2 f = fract(p);
+    float minDist = 8.0;
+    vec2 cellID = vec2(0.0);
+    for (int j = -1; j <= 1; j++) {
+        for (int i = -1; i <= 1; i++) {
+            vec2 g = vec2(float(i), float(j));
+            vec2 o = hash22(n + g);
+            o = 0.5 + 0.5 * sin(t + o * 6.2831);
+            vec2 r = g + o - f;
+            float d = dot(r, r);
+            if (d < minDist) {
+                minDist = d;
+                cellID = n + g;
+            }
+        }
+    }
+    return vec2(sqrt(minDist), pcg_hash(uint(cellID.x + cellID.y * 57.0)));
+}
+
+float smooth_noise2d(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    uint i_x0 = uint(i.x);
+    uint i_x1 = i_x0 + 1u;
+    uint i_y0 = uint(i.y);
+    uint i_y1 = i_y0 + 1u;
+    float v00 = pcg_hash(i_x0 + i_y0 * 1313u);
+    float v10 = pcg_hash(i_x1 + i_y0 * 1313u);
+    float v01 = pcg_hash(i_x0 + i_y1 * 1313u);
+    float v11 = pcg_hash(i_x1 + i_y1 * 1313u);
+    return mix(mix(v00, v10, u.x), mix(v01, v11, u.x), u.y);
+}
+
+
 void main() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    ivec2 size = imageSize(outputImage);
+
+    if (x >= uint(size.x) || y >= uint(size.y)) return;
+
+    uint yy = size.y - 1 - y;
+
+    uint seed = x + yy * uint(size.x) + uint(cos(time * 0.05 + 0.01) * 1000.0);
+    float rnd = pcg_hash(seed);
+    uint seed2 = x + yy * uint(size.x) + uint(5.7 * sin(time * 0.05));
+    float rnd2 = pcg_hash(seed2);
+
+    // --- 1. AXE DE HAUTEUR RÉEL ET CISAILLEMENT ---
+    float real_height = 1.0 - (float(yy) / float(size.y));
+
+    vec2 noise_uv = vec2(float(x) * 0.010, float(yy) * 0.006 + time * 1.2);
+    float wind = smooth_noise2d(noise_uv);
+    float force_x = sin(wind * 6.2831 + time * 3.5) * 80.0 * real_height;
+    float force_y = cos(wind * 3.1415 - time * 2.8) * 40.0 * real_height;
+
+    // --- 2. CONFIGURATION DES PLANS DE DÉFILEMENT ---
+    float heat_scroll = time * 140.0;
+    float smoke_scroll = time * 200.0;
+
+    // --- 3. CALCUL DES PLASMAS ADVEQUÉS ---
+    float fire_plasma = computePlasma(float(x) + force_x * 0.4, float(yy) + heat_scroll, time, rnd, rnd2);
+
+    float fluid_shiver = rnd * 12.0 * real_height;
+    vec2 distorted_coords = vec2(float(x) + force_x + (wind * 80.0 * real_height), float(yy) + smoke_scroll + force_y + fluid_shiver);
+
+    float smoke_plasma = computePlasma(distorted_coords.x, distorted_coords.y, time, rnd, rnd2);
+    float raw_pattern = (smoke_plasma * 0.6 + fire_plasma * 0.4 + 0.35) * 2.0;
+
+    float smoke_pattern = smoothstep(0.01, 0.99, raw_pattern);
+
+    // --- 4. LECTURE DE LA MATRICE DE FEU ---
+    uint size_x  = fire_matrix[0];
+    uint size_y  = fire_matrix[1];
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
+    float fire_distortion_x = fire_plasma * 40.0;
+    float fire_distortion_y = sin(fire_plasma * 3.1415) * 15.0;
+
+    float fire_x = clamp(float(x) + fire_distortion_x, 0.0, float(size_x * scale_x - 1));
+    float fire_yy = clamp(float(yy) + fire_distortion_y, 0.0, float(size_y * scale_y - 1));
+
+    int row = int(floor(fire_x / float(scale_x)));
+    int column = int(floor(fire_yy / float(scale_y)));
+
+    row = clamp(row, 0, int(size_x) - 1);
+    column = clamp(column, 0, int(size_y) - 1);
+
+    vec4 fire_color = uint_to_rgba(palettes[fire_matrix[4 + row + column * int(size_x)]]);
+
+    // --- 5. CONFIGURATION DE L'OPACITÉ DE LA FUMÉE ---
+    float center_x = float(x) / float(size.x);
+    float dynamic_cone = mix(0.40, 6.0, real_height);
+    float middle_column_mask = exp(-pow((center_x - 0.5) / dynamic_cone, 2.0));
+
+    float smoke_fluid_weight = smoothstep(0.25, 0.85, real_height) * middle_column_mask;
+    float smoke_alpha = smoke_pattern * smoke_fluid_weight * 0.85;
+
+    // --- 6. ADVECTION DESYNCHRONISÉE DES ETINCELLES RARES ---
+    vec2 base_ember_uv = vec2(float(x) * 0.15, float(yy) * 0.12);
+    vec2 ember_cell = computeVoronoi(base_ember_uv, 0.0);
+
+    float cell_rand = pcg_hash(uint(ember_cell.y * 789.0));
+    float individual_time = time + cell_rand * 150.0;
+    float individual_speed = 180.0 + (cell_rand * 160.0);
+    float spark_scroll_y = float(yy) + individual_time * individual_speed;
+
+    float individual_sway = wind * 25.0 * sin(individual_time * 2.0 + cell_rand * 10.0);
+    float spark_sway_x = float(x) + force_x * 0.4 + individual_sway;
+
+    vec2 dynamic_ember_uv = vec2(spark_sway_x * 0.28, spark_scroll_y * 0.22);
+    vec2 dynamic_cell = computeVoronoi(dynamic_ember_uv, individual_time * 0.3);
+
+    float random_radius = 0.05 + 0.30 * pcg_hash(uint(dynamic_cell.y * 313.0));
+    float ember_spark = smoothstep(random_radius, random_radius - 0.09, dynamic_cell.x);
+
+    float rarity_filter = step(0.997, pcg_hash(uint(dynamic_cell.y * 997.0)));
+
+    float ember_life = smoothstep(0.01, 0.98, 1.0 - real_height);
+    float blink = 0.5 + 0.5 * sin(individual_time * 18.0 + dynamic_cell.y);
+    float ember_mask = ember_spark * rarity_filter * middle_column_mask * ember_life * blink;
+
+    vec3 ember_color = vec3(2.5, 1.9, 0.2);
+
+    // --- 7. MODIFICATION TECHNIQUE : DISTORSION ET ONDULATION THERMIQUE DU LOGO ---
+    int r_offset = int(10.0 * rnd  * sin(0.001 * time * rnd));
+    int b_offset = int(-10.0 * rnd2 * sin(0.0015 * time * rnd2));
+
+    // MODIFICATION APPLIQUÉE : Au lieu d'utiliser un décalage horizontal fixe,
+    // on injecte les ondes du plasma thermique (fire_distortion_x et fire_distortion_y)
+    // directement sur les coordonnées d'échantillonnage de la texture.
+    float heat_wave_x = fire_distortion_x * 0.8;
+    float heat_wave_y = fire_distortion_y * 0.5;
+
+    int logo_coord_x = clamp(int(x) + r_offset + int(heat_wave_x), 0, size.x - 1);
+    int logo_coord_y = clamp(int(yy) + int(heat_wave_y),            0, size.y - 1);
+
+    float logo_r = imageLoad(doom_logo, ivec2(logo_coord_x, logo_coord_y)).r;
+    float logo_g = imageLoad(doom_logo, ivec2(clamp(int(x) + int(heat_wave_x), 0, size.x - 1), logo_coord_y)).g;
+    float logo_b = imageLoad(doom_logo, ivec2(clamp(int(x) + b_offset + int(heat_wave_x), 0, size.x - 1), logo_coord_y)).b;
+
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
+    float logo_mask = max(max(doom_logo_color.r, doom_logo_color.g), doom_logo_color.b);
+
+    vec4 plasma_color;
+    plasma_color.r = 0.5 * sin(fire_plasma * 3.1415) * 0.5 + 0.5;
+    plasma_color.g = 0.25 * cos(fire_plasma * 3.1415 + time * 0.005) * 0.5 + 0.5;
+    plasma_color.b = 0.15 * sin(fire_plasma * 3.1415 + 1.5) * 0.5 + 0.5;
+    plasma_color.a = 1.0;
+
+    vec3 final_logo = doom_logo_color.rgb * 2.0;
+    if (logo_mask > 0.05) {
+        final_logo += plasma_color.rgb * 0.8;
+    }
+
+    vec3 base_scene_rgb = fire_color.rgb + 1.5 * (0.1 + fire_color.rgb) * final_logo;
+
+    // --- 8. INCORPORATION DE LA FUMÉE ---
+    vec3 soot_absorption = base_scene_rgb * (1.0 - (smoke_alpha * 0.42));
+
+    vec3 smoke_burn_color = base_scene_rgb * 1.3;
+    vec3 smoke_top_color  = vec3(0.26, 0.28, 0.32);
+    vec3 fluid_smoke_color = mix(smoke_burn_color, smoke_top_color, real_height) * smoke_alpha * 0.52;
+
+    vec3 smoke_scene_rgb = soot_absorption + (fluid_smoke_color * mix(0.45, 1.0, real_height));
+
+    // --- 9. INJECTION ADDITIVE DES ETINCELLES JAUNES DESYNCHRONISEES ---
+    vec3 final_rgb = smoke_scene_rgb + (ember_color * ember_mask);
+
+    imageStore(outputImage, ivec2(int(x), int(yy)), vec4(final_rgb, 1.0));
+}
+
+
+void main_almost_done() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    ivec2 size = imageSize(outputImage);
+
+    if (x >= uint(size.x) || y >= uint(size.y)) return;
+
+    uint yy = size.y - 1 - y;
+
+    uint seed = x + yy * uint(size.x) + uint(cos(time * 0.05 + 0.01) * 1000.0);
+    float rnd = pcg_hash(seed);
+    uint seed2 = x + yy * uint(size.x) + uint(5.7 * sin(time * 0.05));
+    float rnd2 = pcg_hash(seed2);
+
+    // --- 1. AXE DE HAUTEUR RÉEL ET CISAILLEMENT ---
+    float real_height = 1.0 - (float(yy) / float(size.y));
+
+    vec2 noise_uv = vec2(float(x) * 0.010, float(yy) * 0.006 + time * 1.2);
+    float wind = smooth_noise2d(noise_uv);
+    float force_x = sin(wind * 6.2831 + time * 3.5) * 80.0 * real_height;
+    float force_y = cos(wind * 3.1415 - time * 2.8) * 40.0 * real_height;
+
+    // --- 2. CONFIGURATION DES PLANS DE DÉFILEMENT ---
+    float heat_scroll = time * 140.0;
+    float smoke_scroll = time * 200.0;
+
+    // --- 3. CALCUL DES PLASMAS ADVEQUÉS ---
+    float fire_plasma = computePlasma(float(x) + force_x * 0.4, float(yy) + heat_scroll, time, rnd, rnd2);
+
+    float fluid_shiver = rnd * 12.0 * real_height;
+    vec2 distorted_coords = vec2(float(x) + force_x + (wind * 80.0 * real_height), float(yy) + smoke_scroll + force_y + fluid_shiver);
+
+    float smoke_plasma = computePlasma(distorted_coords.x, distorted_coords.y, time, rnd, rnd2);
+    float raw_pattern = (smoke_plasma * 0.6 + fire_plasma * 0.4 + 0.35) * 2.0;
+
+    float smoke_pattern = smoothstep(0.01, 0.99, raw_pattern);
+
+    // --- 4. LECTURE DE LA MATRICE DE FEU ---
+    uint size_x  = fire_matrix[0];
+    uint size_y  = fire_matrix[1];
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
+    float fire_distortion_x = fire_plasma * 40.0;
+    float fire_distortion_y = sin(fire_plasma * 3.1415) * 15.0;
+
+    float fire_x = clamp(float(x) + fire_distortion_x, 0.0, float(size_x * scale_x - 1));
+    float fire_yy = clamp(float(yy) + fire_distortion_y, 0.0, float(size_y * scale_y - 1));
+
+    int row = int(floor(fire_x / float(scale_x)));
+    int column = int(floor(fire_yy / float(scale_y)));
+
+    row = clamp(row, 0, int(size_x) - 1);
+    column = clamp(column, 0, int(size_y) - 1);
+
+    vec4 fire_color = uint_to_rgba(palettes[fire_matrix[4 + row + column * int(size_x)]]);
+
+    // --- 5. CONFIGURATION DE L'OPACITÉ DE LA FUMÉE ---
+    float center_x = float(x) / float(size.x);
+    float dynamic_cone = mix(0.40, 6.0, real_height);
+    float middle_column_mask = exp(-pow((center_x - 0.5) / dynamic_cone, 2.0));
+
+    float smoke_fluid_weight = smoothstep(0.25, 0.85, real_height) * middle_column_mask;
+    float smoke_alpha = smoke_pattern * smoke_fluid_weight * 0.85;
+
+    // --- 6. CORRECTION CRITIQUE : BRAISES EN ADVECTION DESYNCHRONISEE (ASYNCHRONE) ---
+    // Grille de base statique pour identifier les cellules et générer leur ID unique (ember_cell.y)
+    vec2 base_ember_uv = vec2(float(x) * 0.15, float(yy) * 0.12);
+    vec2 ember_cell = computeVoronoi(base_ember_uv, 0.0);
+
+    // Graine pseudo-aléatoire propre à chaque particule pour briser l'uniformité temporelle
+    float cell_rand = pcg_hash(uint(ember_cell.y * 789.0));
+
+    // MODIFICATION 1 : Chaque braise reçoit un déphasage temporel unique (time + cell_rand * 150.0)
+    // Fini le spawn simultané, elles s'activent de manière totalement étalée et asynchrone.
+    float individual_time = time + cell_rand * 150.0;
+
+    // MODIFICATION 2 : Vitesse ascensionnelle aléatoire propre à chaque braise (vitesse lente à rapide)
+    float individual_speed = 180.0 + (cell_rand * 160.0);
+    float spark_scroll_y = float(yy) + individual_time * individual_speed;
+
+    // MODIFICATION 3 : Remplacement du sinus global par la turbulence du vent local (wind)
+    // Chaque point dérive de façon erratique de gauche à droite selon sa propre identité
+    float individual_sway = wind * 25.0 * sin(individual_time * 2.0 + cell_rand * 10.0);
+    float spark_sway_x = float(x) + force_x * 0.4 + individual_sway;
+
+    // Échantillonnage final continu dynamique des disques de braises
+    vec2 dynamic_ember_uv = vec2(spark_sway_x * 0.28, spark_scroll_y * 0.22);
+    vec2 dynamic_cell = computeVoronoi(dynamic_ember_uv, individual_time * 0.3);
+
+    // Rayon aléatoire pour varier les diamètres (1 à 3 pixels)
+    float random_radius = 0.05 + 0.30 * pcg_hash(uint(dynamic_cell.y * 313.0));
+    float ember_spark = smoothstep(random_radius, random_radius - 0.09, dynamic_cell.x);
+
+    // Filtrage de rareté sévère pour éviter l'éparpillage de masse
+    float rarity_filter = step(0.997, pcg_hash(uint(dynamic_cell.y * 997.0)));
+
+    float ember_life = smoothstep(0.01, 0.98, 1.0 - real_height);
+    float blink = 0.5 + 0.5 * sin(individual_time * 18.0 + dynamic_cell.y);
+    float ember_mask = ember_spark * rarity_filter * middle_column_mask * ember_life * blink;
+
+    vec3 ember_color = vec3(2.5, 1.9, 0.2);
+
+    // --- 7. RENDU DU LOGO DOOM ---
+    int r_offset = int(10.0 * rnd  * sin(0.001 * time * rnd));
+    int b_offset = int(-10.0 * rnd2 * sin(0.0015 * time * rnd2));
+
+    float logo_dist = fire_distortion_x * 0.6;
+    float logo_r = imageLoad(doom_logo, ivec2(clamp(int(x) + r_offset + int(logo_dist), 0, size.x - 1), int(yy))).r;
+    float logo_g = imageLoad(doom_logo, ivec2(clamp(int(x) + int(logo_dist),            0, size.x - 1), int(yy))).g;
+    float logo_b = imageLoad(doom_logo, ivec2(clamp(int(x) + b_offset + int(logo_dist), 0, size.x - 1), int(yy))).b;
+
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
+    float logo_mask = max(max(doom_logo_color.r, doom_logo_color.g), doom_logo_color.b);
+
+    vec4 plasma_color;
+    plasma_color.r = 0.5 * sin(fire_plasma * 3.1415) * 0.5 + 0.5;
+    plasma_color.g = 0.25 * cos(fire_plasma * 3.1415 + time * 0.005) * 0.5 + 0.5;
+    plasma_color.b = 0.15 * sin(fire_plasma * 3.1415 + 1.5) * 0.5 + 0.5;
+    plasma_color.a = 1.0;
+
+    vec3 final_logo = doom_logo_color.rgb * 2.0;
+    if (logo_mask > 0.05) {
+        final_logo += plasma_color.rgb * 0.8;
+    }
+
+    vec3 base_scene_rgb = fire_color.rgb + 1.5 * (0.1 + fire_color.rgb) * final_logo;
+
+    // --- 8. INCORPORATION DE LA FUMÉE ---
+    vec3 soot_absorption = base_scene_rgb * (1.0 - (smoke_alpha * 0.42));
+
+    vec3 smoke_burn_color = base_scene_rgb * 1.3;
+    vec3 smoke_top_color  = vec3(0.26, 0.28, 0.32);
+    vec3 fluid_smoke_color = mix(smoke_burn_color, smoke_top_color, real_height) * smoke_alpha * 0.52;
+
+    vec3 smoke_scene_rgb = soot_absorption + (fluid_smoke_color * mix(0.45, 1.0, real_height));
+
+    // --- 9. INJECTION ADDITIVE DES ETINCELLES JAUNES DESYNCHRONISEES ---
+    vec3 final_rgb = smoke_scene_rgb + (ember_color * ember_mask);
+
+    imageStore(outputImage, ivec2(int(x), int(yy)), vec4(final_rgb, 1.0));
+}
+
+void main_with_embers() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    ivec2 size = imageSize(outputImage);
+
+    if (x >= uint(size.x) || y >= uint(size.y)) return;
+
+    uint yy = size.y - 1 - y;
+
+    uint seed = x + yy * uint(size.x) + uint(cos(time * 0.05 + 0.01) * 1000.0);
+    float rnd = pcg_hash(seed);
+    uint seed2 = x + yy * uint(size.x) + uint(5.7 * sin(time * 0.05));
+    float rnd2 = pcg_hash(seed2);
+
+    // --- 1. AXE DE HAUTEUR RÉEL ET CISAILLEMENT ---
+    float real_height = 1.0 - (float(yy) / float(size.y));
+
+    vec2 noise_uv = vec2(float(x) * 0.010, float(yy) * 0.006 + time * 1.2);
+    float wind = smooth_noise2d(noise_uv);
+    float force_x = sin(wind * 6.2831 + time * 3.5) * 80.0 * real_height;
+    float force_y = cos(wind * 3.1415 - time * 2.8) * 40.0 * real_height;
+
+    // --- 2. CONFIGURATION DES PLANS DE DÉFILEMENT ---
+    float heat_scroll = time * 140.0;
+    float smoke_scroll = time * 200.0;
+
+    // --- 3. CALCUL DES PLASMAS ADVEQUÉS ---
+    float fire_plasma = computePlasma(float(x) + force_x * 0.4, float(yy) + heat_scroll, time, rnd, rnd2);
+
+    float fluid_shiver = rnd * 12.0 * real_height;
+    vec2 distorted_coords = vec2(float(x) + force_x + (wind * 80.0 * real_height), float(yy) + smoke_scroll + force_y + fluid_shiver);
+
+    float smoke_plasma = computePlasma(distorted_coords.x, distorted_coords.y, time, rnd, rnd2);
+    float raw_pattern = (smoke_plasma * 0.6 + fire_plasma * 0.4 + 0.35) * 2.0;
+
+    float smoke_pattern = smoothstep(0.01, 0.99, raw_pattern);
+
+    // --- 4. LECTURE DE LA MATRICE DE FEU ---
+    uint size_x  = fire_matrix[0];
+    uint size_y  = fire_matrix[1];
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
+    float fire_distortion_x = fire_plasma * 40.0;
+    float fire_distortion_y = sin(fire_plasma * 3.1415) * 15.0;
+
+    float fire_x = clamp(float(x) + fire_distortion_x, 0.0, float(size_x * scale_x - 1));
+    float fire_yy = clamp(float(yy) + fire_distortion_y, 0.0, float(size_y * scale_y - 1));
+
+    int row = int(floor(fire_x / float(scale_x)));
+    int column = int(floor(fire_yy / float(scale_y)));
+
+    row = clamp(row, 0, int(size_x) - 1);
+    column = clamp(column, 0, int(size_y) - 1);
+
+    vec4 fire_color = uint_to_rgba(palettes[fire_matrix[4 + row + column * int(size_x)]]);
+
+    // --- 5. MICRO-AJUSTEMENT DE L'OPACITÉ DE LA FUMÉE ---
+    float center_x = float(x) / float(size.x);
+    float dynamic_cone = mix(0.40, 6.0, real_height);
+    float middle_column_mask = exp(-pow((center_x - 0.5) / dynamic_cone, 2.0));
+
+    float smoke_fluid_weight = smoothstep(0.25, 0.85, real_height) * middle_column_mask;
+    float smoke_alpha = smoke_pattern * smoke_fluid_weight * 0.78;
+
+    // --- 6. MODIFICATION : GÉNÉRATEUR DE BRAISES PROJETÉES ULTRA-RAPIDES ---
+    // On génère un défilement vertical ultra-rapide (380.0) combiné à un tremblement horizontal pour les braises
+    float ember_scroll = time * 380.0;
+    float ember_sway = sin(float(yy) * 0.05 + time * 10.0) * 12.0;
+
+    // Échantillonnage d'un hash spatial unique par pixel mouvant
+    uint ember_seed = uint(float(x) + ember_sway) + uint(float(yy) + ember_scroll) * uint(size.x);
+    float ember_noise = pcg_hash(ember_seed + uint(time * 0.02));
+
+    // Le smoothstep ultra-serré isole de micro-points (uniquement si le hasard dépasse 0.994)
+    float ember_spark = smoothstep(0.994, 1.0, ember_noise);
+
+    // Masque de dissipation : Les braises naissent dans le feu vif et s'éteignent doucement au plafond (0.90)
+    float ember_life = smoothstep(0.10, 0.90, 1.0 - real_height);
+    float ember_mask = ember_spark * middle_column_mask * ember_life;
+
+    // Teinte des braises : Jaune/Orange étincelant émissif (s'échantillonne sur le feu pour la cohérence)
+    vec3 ember_color = vec3(1.5, 0.55, 0.1) * fire_plasma * 2.5;
+
+    // --- 7. RENDU DU LOGO DOOM ---
+    int r_offset = int(10.0 * rnd  * sin(0.001 * time * rnd));
+    int b_offset = int(-10.0 * rnd2 * sin(0.0015 * time * rnd2));
+
+    float logo_dist = fire_distortion_x * 0.6;
+    float logo_r = imageLoad(doom_logo, ivec2(clamp(int(x) + r_offset + int(logo_dist), 0, size.x - 1), int(yy))).r;
+    float logo_g = imageLoad(doom_logo, ivec2(clamp(int(x) + int(logo_dist),            0, size.x - 1), int(yy))).g;
+    float logo_b = imageLoad(doom_logo, ivec2(clamp(int(x) + b_offset + int(logo_dist), 0, size.x - 1), int(yy))).b;
+
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
+    float logo_mask = max(max(doom_logo_color.r, doom_logo_color.g), doom_logo_color.b);
+
+    vec4 plasma_color;
+    plasma_color.r = 0.5 * sin(fire_plasma * 3.1415) * 0.5 + 0.5;
+    plasma_color.g = 0.25 * cos(fire_plasma * 3.1415 + time * 0.005) * 0.5 + 0.5;
+    plasma_color.b = 0.15 * sin(fire_plasma * 3.1415 + 1.5) * 0.5 + 0.5;
+    plasma_color.a = 1.0;
+
+    vec3 final_logo = doom_logo_color.rgb * 2.0;
+    if (logo_mask > 0.05) {
+        final_logo += plasma_color.rgb * 0.8;
+    }
+
+    vec3 base_scene_rgb = fire_color.rgb + 1.5 * (0.1 + fire_color.rgb) * final_logo;
+
+    // --- 8. INCORPORATION SOMBRE ET TRANSLUCIDE ---
+    vec3 soot_absorption = base_scene_rgb * (1.0 - (smoke_alpha * 0.50));
+
+    vec3 smoke_burn_color = base_scene_rgb * 1.3;
+    vec3 smoke_top_color  = vec3(0.26, 0.28, 0.32);
+    vec3 fluid_smoke_color = mix(smoke_burn_color, smoke_top_color, real_height) * smoke_alpha * 0.52;
+
+    vec3 smoke_scene_rgb = soot_absorption + (fluid_smoke_color * mix(0.45, 1.0, real_height));
+
+    // --- 9. INJECTION INCRUSTÉE DES ÉTINCELLES AU-DESSUS DE LA COUCHE ---
+    // On superpose par additivité pure les éclats incandescents des braises qui percent le nuage gris
+    vec3 final_rgb = smoke_scene_rgb + (ember_color * ember_mask);
+
+    imageStore(outputImage, ivec2(int(x), int(yy)), vec4(final_rgb, 1.0));
+}
+
+void main_smokde_quasi_good() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    ivec2 size = imageSize(outputImage);
+
+    if (x >= uint(size.x) || y >= uint(size.y)) return;
+
+    uint yy = size.y - 1 - y;
+
+    uint seed = x + yy * uint(size.x) + uint(cos(time * 0.05 + 0.01) * 1000.0);
+    float rnd = pcg_hash(seed);
+    uint seed2 = x + yy * uint(size.x) + uint(5.7 * sin(time * 0.05));
+    float rnd2 = pcg_hash(seed2);
+
+    // --- 1. AXE DE HAUTEUR RÉEL ET CISAILLEMENT ---
+    float real_height = 1.0 - (float(yy) / float(size.y));
+
+    vec2 noise_uv = vec2(float(x) * 0.010, float(yy) * 0.006 + time * 1.2);
+    float wind = smooth_noise2d(noise_uv);
+    float force_x = sin(wind * 6.2831 + time * 3.5) * 80.0 * real_height;
+    float force_y = cos(wind * 3.1415 - time * 2.8) * 40.0 * real_height;
+
+    // --- 2. CONFIGURATION DES PLANS DE DÉFILEMENT ---
+    float heat_scroll = time * 140.0;
+    float smoke_scroll = time * 200.0;
+
+    // --- 3. CALCUL DES PLASMAS ADVEQUÉS ---
+    float fire_plasma = computePlasma(float(x) + force_x * 0.4, float(yy) + heat_scroll, time, rnd, rnd2);
+
+    float fluid_shiver = rnd * 12.0 * real_height;
+    vec2 distorted_coords = vec2(float(x) + force_x + (wind * 80.0 * real_height), float(yy) + smoke_scroll + force_y + fluid_shiver);
+
+    float smoke_plasma = computePlasma(distorted_coords.x, distorted_coords.y, time, rnd, rnd2);
+    float raw_pattern = (smoke_plasma * 0.6 + fire_plasma * 0.4 + 0.35) * 2.0;
+
+    float smoke_pattern = smoothstep(0.01, 0.99, raw_pattern);
+
+    // --- 4. LECTURE DE LA MATRICE DE FEU ---
+    uint size_x  = fire_matrix[0];
+    uint size_y  = fire_matrix[1];
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
+    float fire_distortion_x = fire_plasma * 40.0;
+    float fire_distortion_y = sin(fire_plasma * 3.1415) * 15.0;
+
+    float fire_x = clamp(float(x) + fire_distortion_x, 0.0, float(size_x * scale_x - 1));
+    float fire_yy = clamp(float(yy) + fire_distortion_y, 0.0, float(size_y * scale_y - 1));
+
+    int row = int(floor(fire_x / float(scale_x)));
+    int column = int(floor(fire_yy / float(scale_y)));
+
+    row = clamp(row, 0, int(size_x) - 1);
+    column = clamp(column, 0, int(size_y) - 1);
+
+    vec4 fire_color = uint_to_rgba(palettes[fire_matrix[4 + row + column * int(size_x)]]);
+
+    // --- 5. MICRO-AJUSTEMENT DE L'OPACITÉ ---
+    float center_x = float(x) / float(size.x);
+    float dynamic_cone = mix(0.40, 6.0, real_height);
+    float middle_column_mask = exp(-pow((center_x - 0.5) / dynamic_cone, 2.0));
+
+    float smoke_fluid_weight = smoothstep(0.25, 0.85, real_height) * middle_column_mask;
+
+    // Légère baisse du coefficient (0.85 -> 0.78) pour affiner la silhouette des volutes
+    float smoke_alpha = smoke_pattern * smoke_fluid_weight * 0.78;
+
+    // --- 6. RENDU DU LOGO DOOM ---
+    int r_offset = int(10.0 * rnd  * sin(0.001 * time * rnd));
+    int b_offset = int(-10.0 * rnd2 * sin(0.0015 * time * rnd2));
+
+    float logo_dist = fire_distortion_x * 0.6;
+    float logo_r = imageLoad(doom_logo, ivec2(clamp(int(x) + r_offset + int(logo_dist), 0, size.x - 1), int(yy))).r;
+    float logo_g = imageLoad(doom_logo, ivec2(clamp(int(x) + int(logo_dist),            0, size.x - 1), int(yy))).g;
+    float logo_b = imageLoad(doom_logo, ivec2(clamp(int(x) + b_offset + int(logo_dist), 0, size.x - 1), int(yy))).b;
+
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
+    float logo_mask = max(max(doom_logo_color.r, doom_logo_color.g), doom_logo_color.b);
+
+    vec4 plasma_color;
+    plasma_color.r = 0.5 * sin(fire_plasma * 3.1415) * 0.5 + 0.5;
+    plasma_color.g = 0.25 * cos(fire_plasma * 3.1415 + time * 0.005) * 0.5 + 0.5;
+    plasma_color.b = 0.15 * sin(fire_plasma * 3.1415 + 1.5) * 0.5 + 0.5;
+    plasma_color.a = 1.0;
+
+    vec3 final_logo = doom_logo_color.rgb * 2.0;
+    if (logo_mask > 0.05) {
+        final_logo += plasma_color.rgb * 0.8;
+    }
+
+    vec3 base_scene_rgb = fire_color.rgb + 1.5 * (0.1 + fire_color.rgb) * final_logo;
+
+    // --- 7. INCORPORATION SUBTILE ET HARMONIEUSE ---
+    // MICRO-AJUSTEMENT : L'absorption bloque désormais 50% max (au lieu de 60%) pour laisser respirer le fond
+    vec3 soot_absorption = base_scene_rgb * (1.0 - (smoke_alpha * 0.50));
+
+    vec3 smoke_burn_color = base_scene_rgb * 1.3;
+    vec3 smoke_top_color  = vec3(0.26, 0.28, 0.32);
+    vec3 fluid_smoke_color = mix(smoke_burn_color, smoke_top_color, smoothstep(0.35, 0.90, real_height));
+
+    // L'injection de matière est également allégée (0.52 au lieu de 0.65)
+    vec3 dynamic_smoke_body = fluid_smoke_color * smoke_alpha * 0.52;
+    vec3 final_rgb = soot_absorption + (dynamic_smoke_body * mix(0.45, 1.0, real_height));
+
+    imageStore(outputImage, ivec2(int(x), int(yy)), vec4(final_rgb, 1.0));
+}
+
+void main_smoke_a_bit_dense() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    ivec2 size = imageSize(outputImage);
+
+    if (x >= uint(size.x) || y >= uint(size.y)) return;
+
+    uint yy = size.y - 1 - y;
+
+    uint seed = x + yy * uint(size.x) + uint(cos(time * 0.05 + 0.01) * 1000.0);
+    float rnd = pcg_hash(seed);
+    uint seed2 = x + yy * uint(size.x) + uint(5.7 * sin(time * 0.05));
+    float rnd2 = pcg_hash(seed2);
+
+    // --- 1. AXE DE HAUTEUR RÉEL ET CISAILLEMENT ---
+    float real_height = 1.0 - (float(yy) / float(size.y));
+
+    vec2 noise_uv = vec2(float(x) * 0.010, float(yy) * 0.006 + time * 1.2);
+    float wind = smooth_noise2d(noise_uv);
+    float force_x = sin(wind * 6.2831 + time * 3.5) * 80.0 * real_height;
+    float force_y = cos(wind * 3.1415 - time * 2.8) * 40.0 * real_height;
+
+    // --- 2. CONFIGURATION DES PLANS DE DÉFILEMENT ---
+    float heat_scroll = time * 140.0;
+    float smoke_scroll = time * 200.0;
+
+    // --- 3. CALCUL DES PLASMAS ADVEQUÉS ---
+    float fire_plasma = computePlasma(float(x) + force_x * 0.4, float(yy) + heat_scroll, time, rnd, rnd2);
+
+    float fluid_shiver = rnd * 12.0 * real_height;
+    vec2 distorted_coords = vec2(float(x) + force_x + (wind * 80.0 * real_height), float(yy) + smoke_scroll + force_y + fluid_shiver);
+
+    float smoke_plasma = computePlasma(distorted_coords.x, distorted_coords.y, time, rnd, rnd2);
+    float raw_pattern = (smoke_plasma * 0.6 + fire_plasma * 0.4 + 0.35) * 2.0;
+
+    float smoke_pattern = smoothstep(0.01, 0.99, raw_pattern);
+
+    // --- 4. LECTURE DE LA MATRICE DE FEU ---
+    uint size_x  = fire_matrix[0];
+    uint size_y  = fire_matrix[1];
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
+    float fire_distortion_x = fire_plasma * 40.0;
+    float fire_distortion_y = sin(fire_plasma * 3.1415) * 15.0;
+
+    float fire_x = clamp(float(x) + fire_distortion_x, 0.0, float(size_x * scale_x - 1));
+    float fire_yy = clamp(float(yy) + fire_distortion_y, 0.0, float(size_y * scale_y - 1));
+
+    int row = int(floor(fire_x / float(scale_x)));
+    int column = int(floor(fire_yy / float(scale_y)));
+
+    row = clamp(row, 0, int(size_x) - 1);
+    column = clamp(column, 0, int(size_y) - 1);
+
+    vec4 fire_color = uint_to_rgba(palettes[fire_matrix[4 + row + column * int(size_x)]]);
+
+    // --- 5. RECALIBRAGE DU JUSTE MILIEU DE DENSITÉ ---
+    float center_x = float(x) / float(size.x);
+    float dynamic_cone = mix(0.40, 6.0, real_height);
+    float middle_column_mask = exp(-pow((center_x - 0.5) / dynamic_cone, 2.0));
+
+    float smoke_fluid_weight = smoothstep(0.25, 0.85, real_height) * middle_column_mask;
+
+    // Équilibre de présence (0.85 max) pour éviter l'effet "stickers" opaque ou l'invisibilité
+    float smoke_alpha = smoke_pattern * smoke_fluid_weight * 0.85;
+
+    // --- 6. RENDU DU LOGO DOOM ---
+    int r_offset = int(10.0 * rnd  * sin(0.001 * time * rnd));
+    int b_offset = int(-10.0 * rnd2 * sin(0.0015 * time * rnd2));
+
+    float logo_dist = fire_distortion_x * 0.6;
+    float logo_r = imageLoad(doom_logo, ivec2(clamp(int(x) + r_offset + int(logo_dist), 0, size.x - 1), int(yy))).r;
+    float logo_g = imageLoad(doom_logo, ivec2(clamp(int(x) + int(logo_dist),            0, size.x - 1), int(yy))).g;
+    float logo_b = imageLoad(doom_logo, ivec2(clamp(int(x) + b_offset + int(logo_dist), 0, size.x - 1), int(yy))).b;
+
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
+    float logo_mask = max(max(doom_logo_color.r, doom_logo_color.g), doom_logo_color.b);
+
+    vec4 plasma_color;
+    plasma_color.r = 0.5 * sin(fire_plasma * 3.1415) * 0.5 + 0.5;
+    plasma_color.g = 0.25 * cos(fire_plasma * 3.1415 + time * 0.005) * 0.5 + 0.5;
+    plasma_color.b = 0.15 * sin(fire_plasma * 3.1415 + 1.5) * 0.5 + 0.5;
+    plasma_color.a = 1.0;
+
+    vec3 final_logo = doom_logo_color.rgb * 2.0;
+    if (logo_mask > 0.05) {
+        final_logo += plasma_color.rgb * 0.8;
+    }
+
+    vec3 base_scene_rgb = fire_color.rgb + 1.5 * (0.1 + fire_color.rgb) * final_logo;
+
+    // --- 7. EQUILIBRAGE SPECTRAL DE LA MATIÈRE SOMBRE ET TRANSLUCIDE ---
+    // MODIFICATION DE COUPLAGE : L'absorption bloque 60% de la lumière d'arrière-plan au maximum
+    vec3 soot_absorption = base_scene_rgb * (1.0 - (smoke_alpha * 0.60));
+
+    vec3 smoke_burn_color = base_scene_rgb * 1.3;
+
+    // MODIFICATION CHROMATIQUE : Teinte équilibrée gris-bleutée tempérée.
+    // Elle apporte du volume et marque les contours de convection de façon naturelle.
+    vec3 smoke_top_color  = vec3(0.26, 0.28, 0.32);
+    vec3 fluid_smoke_color = mix(smoke_burn_color, smoke_top_color, smoothstep(0.35, 0.90, real_height));
+
+    vec3 dynamic_smoke_body = fluid_smoke_color * smoke_alpha * 0.65;
+    vec3 final_rgb = soot_absorption + (dynamic_smoke_body * mix(0.45, 1.0, real_height));
+
+    imageStore(outputImage, ivec2(int(x), int(yy)), vec4(final_rgb, 1.0));
+}
+
+
+
+void main_smoke_too_etheral() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    ivec2 size = imageSize(outputImage);
+
+    if (x >= uint(size.x) || y >= uint(size.y)) return;
+
+    uint yy = size.y - 1 - y;
+
+    uint seed = x + yy * uint(size.x) + uint(cos(time * 0.05 + 0.01) * 1000.0);
+    float rnd = pcg_hash(seed);
+    uint seed2 = x + yy * uint(size.x) + uint(5.7 * sin(time * 0.05));
+    float rnd2 = pcg_hash(seed2);
+
+    // --- 1. AXE DE HAUTEUR RÉEL ET CISAILLEMENT ---
+    float real_height = 1.0 - (float(yy) / float(size.y));
+
+    vec2 noise_uv = vec2(float(x) * 0.010, float(yy) * 0.006 + time * 1.2);
+    float wind = smooth_noise2d(noise_uv);
+    float force_x = sin(wind * 6.2831 + time * 3.5) * 80.0 * real_height;
+    float force_y = cos(wind * 3.1415 - time * 2.8) * 40.0 * real_height;
+
+    // --- 2. CONFIGURATION DES PLANS DE DÉFILEMENT ---
+    float heat_scroll = time * 140.0;
+    float smoke_scroll = time * 200.0;
+
+    // --- 3. CALCUL DES PLASMAS ADVEQUÉS ---
+    float fire_plasma = computePlasma(float(x) + force_x * 0.4, float(yy) + heat_scroll, time, rnd, rnd2);
+
+    float fluid_shiver = rnd * 12.0 * real_height;
+    vec2 distorted_coords = vec2(float(x) + force_x + (wind * 80.0 * real_height), float(yy) + smoke_scroll + force_y + fluid_shiver);
+
+    float smoke_plasma = computePlasma(distorted_coords.x, distorted_coords.y, time, rnd, rnd2);
+    float raw_pattern = (smoke_plasma * 0.6 + fire_plasma * 0.4 + 0.35) * 2.0;
+
+    float smoke_pattern = smoothstep(0.01, 0.99, raw_pattern);
+
+    // --- 4. LECTURE DE LA MATRICE DE FEU AVEC INDICES STABLES ---
+    uint size_x  = fire_matrix[0];
+    uint size_y  = fire_matrix[1];
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
+    float fire_distortion_x = fire_plasma * 40.0;
+    float fire_distortion_y = sin(fire_plasma * 3.1415) * 15.0;
+
+    float fire_x = clamp(float(x) + fire_distortion_x, 0.0, float(size_x * scale_x - 1));
+    float fire_yy = clamp(float(yy) + fire_distortion_y, 0.0, float(size_y * scale_y - 1));
+
+    int row = int(floor(fire_x / float(scale_x)));
+    int column = int(floor(fire_yy / float(scale_y)));
+
+    row = clamp(row, 0, int(size_x) - 1);
+    column = clamp(column, 0, int(size_y) - 1);
+
+    vec4 fire_color = uint_to_rgba(palettes[fire_matrix[4 + row + column * int(size_x)]]);
+
+    // --- 5. ÉTALEMENT MAXIMUM ET MULTIPLICATEUR ALPHA ÉCLAIRCI ---
+    float center_x = float(x) / float(size.x);
+    float dynamic_cone = mix(0.40, 6.0, real_height);
+    float middle_column_mask = exp(-pow((center_x - 0.5) / dynamic_cone, 2.0));
+
+    float smoke_fluid_weight = smoothstep(0.25, 0.85, real_height) * middle_column_mask;
+
+    // MODIFICATION DE DENSITÉ : Le coefficient d'opacité global de la matière est réduit à 0.48 (au lieu du fbm lourd à 1.0)
+    // Cela rend le voile de fumée hautement diaphane et translucide à l'écran.
+    float smoke_alpha = smoke_pattern * smoke_fluid_weight * 0.48;
+
+    // --- 6. RENDU DU LOGO DOOM ---
+    int r_offset = int(10.0 * rnd  * sin(0.001 * time * rnd));
+    int b_offset = int(-10.0 * rnd2 * sin(0.0015 * time * rnd2));
+
+    float logo_dist = fire_distortion_x * 0.6;
+    float logo_r = imageLoad(doom_logo, ivec2(clamp(int(x) + r_offset + int(logo_dist), 0, size.x - 1), int(yy))).r;
+    float logo_g = imageLoad(doom_logo, ivec2(clamp(int(x) + int(logo_dist),            0, size.x - 1), int(yy))).g;
+    float logo_b = imageLoad(doom_logo, ivec2(clamp(int(x) + b_offset + int(logo_dist), 0, size.x - 1), int(yy))).b;
+
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
+    float logo_mask = max(max(doom_logo_color.r, doom_logo_color.g), doom_logo_color.b);
+
+    vec4 plasma_color;
+    plasma_color.r = 0.5 * sin(fire_plasma * 3.1415) * 0.5 + 0.5;
+    plasma_color.g = 0.25 * cos(fire_plasma * 3.1415 + time * 0.005) * 0.5 + 0.5;
+    plasma_color.b = 0.15 * sin(fire_plasma * 3.1415 + 1.5) * 0.5 + 0.5;
+    plasma_color.a = 1.0;
+
+    vec3 final_logo = doom_logo_color.rgb * 2.0;
+    if (logo_mask > 0.05) {
+        final_logo += plasma_color.rgb * 0.8;
+    }
+
+    vec3 base_scene_rgb = fire_color.rgb + 1.5 * (0.1 + fire_color.rgb) * final_logo;
+
+    // --- 7. INCORPORATION DIAPHANE ET DISCRÈTE DE LA SUIE ---
+    // MODIFICATION DE DENSITÉ : L'absorption lumineuse maximale tombe à 0.45 (au lieu de 0.92)
+    // L'arrière-plan noir et le logo ne se font plus étouffer, ils traversent proprement le fluide.
+    vec3 soot_absorption = base_scene_rgb * (1.0 - (smoke_alpha * 0.45));
+
+    vec3 smoke_burn_color = base_scene_rgb * 1.4;
+    vec3 smoke_cold_soot  = vec3(0.12, 0.13, 0.15);
+    vec3 fluid_smoke_color = mix(smoke_burn_color, smoke_cold_soot, smoothstep(0.35, 0.90, real_height));
+
+    // L'apport de couleur est lui aussi adouci pour accompagner la transparence
+    vec3 dynamic_smoke_body = fluid_smoke_color * smoke_alpha * 0.50;
+    vec3 final_rgb = soot_absorption + (dynamic_smoke_body * mix(0.45, 1.0, real_height));
+
+    imageStore(outputImage, ivec2(int(x), int(yy)), vec4(final_rgb, 1.0));
+}
+
+
+void main_dense_smoke() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    ivec2 size = imageSize(outputImage);
+
+    if (x >= uint(size.x) || y >= uint(size.y)) return;
+
+    uint yy = size.y - 1 - y;
+
+    uint seed = x + yy * uint(size.x) + uint(cos(time * 0.05 + 0.01) * 1000.0);
+    float rnd = pcg_hash(seed);
+    uint seed2 = x + yy * uint(size.x) + uint(5.7 * sin(time * 0.05));
+    float rnd2 = pcg_hash(seed2);
+
+    // --- 1. AXE DE HAUTEUR RÉEL ET CISAILLEMENT ---
+    float real_height = 1.0 - (float(yy) / float(size.y));
+
+    // Fréquence du vent légèrement diminuée (0.010) pour lisser les vagues de dérive
+    vec2 noise_uv = vec2(float(x) * 0.010, float(yy) * 0.006 + time * 1.2);
+    float wind = smooth_noise2d(noise_uv);
+    float force_x = sin(wind * 6.2831 + time * 3.5) * 80.0 * real_height;
+    float force_y = cos(wind * 3.1415 - time * 2.8) * 40.0 * real_height;
+
+    // --- 2. CONFIGURATION DES PLANS DE DÉFILEMENT ---
+    float heat_scroll = time * 140.0;
+    float smoke_scroll = time * 200.0;
+
+    // --- 3. MODIFICATION DE FLOU PAR ADVECTION (SMOOTH-WARPING) ---
+    float fire_plasma = computePlasma(float(x) + force_x * 0.4, float(yy) + heat_scroll, time, rnd, rnd2);
+
+    // MODIFICATION CLÉ : On injecte directement la valeur continue 'wind * 80.0' dans la lecture spatiale du plasma.
+    // Cela dilate, mélange et estompe les fronts d'ondes pour supprimer toute transition brusque.
+    float fluid_shiver = rnd * 12.0 * real_height;
+    float distorted_x = float(x) + force_x + (wind * 80.0 * real_height);
+    float distorted_yy = float(yy) + smoke_scroll + force_y + fluid_shiver;
+
+    float smoke_plasma = computePlasma(distorted_x, distorted_yy, time, rnd, rnd2);
+    float raw_pattern = (smoke_plasma * 0.6 + fire_plasma * 0.4 + 0.35) * 2.0;
+
+    // Plage d'interpolation douce et maximale (0.01 à 0.99)
+    float smoke_pattern = smoothstep(0.01, 0.99, raw_pattern);
+
+    // --- 4. LECTURE SÉCURISÉE DE LA MATRICE DE FEU ---
+    uint size_x  = fire_matrix[0];
+    uint size_y  = fire_matrix[1];
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
+    float fire_distortion_x = fire_plasma * 40.0;
+    float fire_distortion_y = sin(fire_plasma * 3.1415) * 15.0;
+
+    float fire_x = clamp(float(x) + fire_distortion_x, 0.0, float(size_x * scale_x - 1));
+    float fire_yy = clamp(float(yy) + fire_distortion_y, 0.0, float(size_y * scale_y - 1));
+
+    int row = int(floor(fire_x / float(scale_x)));
+    int column = int(floor(fire_yy / float(scale_y)));
+
+    row = clamp(row, 0, int(size_x) - 1);
+    column = clamp(column, 0, int(size_y) - 1);
+
+    vec4 fire_color = uint_to_rgba(palettes[fire_matrix[4 + row + column * int(size_x)]]);
+
+    // --- 5. ÉTALEMENT GAUSSIEN TRÈS LARGE ---
+    float center_x = float(x) / float(size.x);
+    // Élargissement du cône de diffusion à 6.0 au plafond pour un fondu latéral ultra-doux
+    float dynamic_cone = mix(0.40, 6.0, real_height);
+    float middle_column_mask = exp(-pow((center_x - 0.5) / dynamic_cone, 2.0));
+
+    float smoke_fluid_weight = smoothstep(0.25, 0.85, real_height) * middle_column_mask;
+    float smoke_alpha = smoke_pattern * smoke_fluid_weight;
+
+    // --- 6. RENDU DU LOGO DOOM ---
+    int r_offset = int(10.0 * rnd  * sin(0.001 * time * rnd));
+    int b_offset = int(-10.0 * rnd2 * sin(0.0015 * time * rnd2));
+
+    float logo_dist = fire_distortion_x * 0.6;
+    float logo_r = imageLoad(doom_logo, ivec2(clamp(int(x) + r_offset + int(logo_dist), 0, size.x - 1), int(yy))).r;
+    float logo_g = imageLoad(doom_logo, ivec2(clamp(int(x) + int(logo_dist),            0, size.x - 1), int(yy))).g;
+    float logo_b = imageLoad(doom_logo, ivec2(clamp(int(x) + b_offset + int(logo_dist), 0, size.x - 1), int(yy))).b;
+
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
+    float logo_mask = max(max(doom_logo_color.r, doom_logo_color.g), doom_logo_color.b);
+
+    vec4 plasma_color;
+    plasma_color.r = 0.5 * sin(fire_plasma * 3.1415) * 0.5 + 0.5;
+    plasma_color.g = 0.25 * cos(fire_plasma * 3.1415 + time * 0.005) * 0.5 + 0.5;
+    plasma_color.b = 0.15 * sin(fire_plasma * 3.1415 + 1.5) * 0.5 + 0.5;
+    plasma_color.a = 1.0;
+
+    vec3 final_logo = doom_logo_color.rgb * 2.0;
+    if (logo_mask > 0.05) {
+        final_logo += plasma_color.rgb * 0.8;
+    }
+
+    vec3 base_scene_rgb = fire_color.rgb + 1.5 * (0.1 + fire_color.rgb) * final_logo;
+
+    // --- 7. MUTATION ET FUSION VOLUMÉTRIQUE ADOUCIE ---
+    vec3 smoke_burn_color = base_scene_rgb * 1.4;
+    vec3 smoke_cold_soot  = vec3(0.12, 0.13, 0.15);
+
+    vec3 fluid_smoke_color = mix(smoke_burn_color, smoke_cold_soot, smoothstep(0.35, 0.90, real_height));
+
+    vec3 soot_absorption = base_scene_rgb * (1.0 - (smoke_alpha * 0.92));
+    vec3 dynamic_smoke_body = fluid_smoke_color * smoke_alpha;
+
+    vec3 final_rgb = soot_absorption + (dynamic_smoke_body * mix(0.45, 1.0, real_height));
+
+    imageStore(outputImage, ivec2(int(x), int(yy)), vec4(final_rgb, 1.0));
+}
+
+void main_smoke_not_bad() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    ivec2 size = imageSize(outputImage);
+
+    if (x >= uint(size.x) || y >= uint(size.y)) return;
+
+    uint yy = size.y - 1 - y;
+
+    uint seed = x + yy * uint(size.x) + uint(cos(time * 0.05 + 0.01) * 1000.0);
+    float rnd = pcg_hash(seed);
+    uint seed2 = x + yy * uint(size.x) + uint(5.7 * sin(time * 0.05));
+    float rnd2 = pcg_hash(seed2);
+
+    // --- 1. AXE DE HAUTEUR RÉEL ET CISAILLEMENT ---
+    float real_height = 1.0 - (float(yy) / float(size.y));
+
+    vec2 noise_uv = vec2(float(x) * 0.015, float(yy) * 0.008 + time * 1.5);
+    float wind = smooth_noise2d(noise_uv);
+    float force_x = sin(wind * 6.2831 + time * 4.5) * 75.0 * real_height;
+    float force_y = cos(wind * 3.1415 - time * 3.5) * 35.0 * real_height;
+
+    // --- 2. CONFIGURATION DES PLANS DE DÉFILEMENT ---
+    float heat_scroll = time * 140.0;
+    float smoke_scroll = time * 220.0;
+
+    // --- 3. CALCUL DES PLASMAS NATIFS ---
+    float fire_plasma = computePlasma(float(x) + force_x * 0.4, float(yy) + heat_scroll, time, rnd, rnd2);
+    float smoke_plasma = computePlasma(float(x) + force_x, float(yy) + smoke_scroll + force_y, time, rnd, rnd2);
+
+    // --- 4. LECTURE DE LA MATRICE DE FEU ---
+    uint size_x  = fire_matrix[0];
+    uint size_y  = fire_matrix[1];
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
+    float fire_distortion_x = fire_plasma * 40.0;
+    float fire_distortion_y = sin(fire_plasma * 3.1415) * 15.0;
+
+    float fire_x = clamp(float(x) + fire_distortion_x, 0.0, float(size_x * scale_x - 1));
+    float fire_yy = clamp(float(yy) + fire_distortion_y, 0.0, float(size_y * scale_y - 1));
+
+    int row = int(floor(fire_x / float(scale_x)));
+    int column = int(floor(fire_yy / float(scale_y)));
+
+    row = clamp(row, 0, int(size_x) - 1);
+    column = clamp(column, 0, int(size_y) - 1);
+
+    vec4 fire_color = uint_to_rgba(palettes[fire_matrix[4 + row + column * int(size_x)]]);
+
+    // --- 5. MODIFICATION CRITIQUE : TRANSITIONS NUANCÉES (SMOOTH DISSIPATION) ---
+    float center_x = float(x) / float(size.x);
+    float dynamic_cone = mix(0.40, 5.0, real_height);
+    float middle_column_mask = exp(-pow((center_x - 0.5) / dynamic_cone, 2.0));
+
+    float smoke_fluid_weight = smoothstep(0.25, 0.85, real_height) * middle_column_mask;
+
+    float dynamic_gain = 2.1 + (rnd * 0.25);
+    float raw_pattern = (smoke_plasma * 0.6 + fire_plasma * 0.4 + 0.3) * dynamic_gain;
+    float smoke_pattern = clamp(raw_pattern, 0.0, 1.0);
+
+    // NUANÇAGE DE L'ALPHA : L'application d'un profil cosinusoïdal adoucit la transition périphérique.
+    // Les franges de la fumée s'estompent de manière extrêmement diffuse vers la transparence.
+    float nuanced_alpha = 0.5 - 0.5 * cos(smoke_pattern * 3.14159265);
+    float smoke_alpha = nuanced_alpha * smoke_fluid_weight;
+
+    // --- 6. RENDU DU LOGO DOOM ---
+    int r_offset = int(10.0 * rnd  * sin(0.001 * time * rnd));
+    int b_offset = int(-10.0 * rnd2 * sin(0.0015 * time * rnd2));
+
+    float logo_dist = fire_distortion_x * 0.6;
+    float logo_r = imageLoad(doom_logo, ivec2(clamp(int(x) + r_offset + int(logo_dist), 0, size.x - 1), int(yy))).r;
+    float logo_g = imageLoad(doom_logo, ivec2(clamp(int(x) + int(logo_dist),            0, size.x - 1), int(yy))).g;
+    float logo_b = imageLoad(doom_logo, ivec2(clamp(int(x) + b_offset + int(logo_dist), 0, size.x - 1), int(yy))).b;
+
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
+    float logo_mask = max(max(doom_logo_color.r, doom_logo_color.g), doom_logo_color.b);
+
+    vec4 plasma_color;
+    plasma_color.r = 0.5 * sin(fire_plasma * 3.1415) * 0.5 + 0.5;
+    plasma_color.g = 0.25 * cos(fire_plasma * 3.1415 + time * 0.005) * 0.5 + 0.5;
+    plasma_color.b = 0.15 * sin(fire_plasma * 3.1415 + 1.5) * 0.5 + 0.5;
+    plasma_color.a = 1.0;
+
+    vec3 final_logo = doom_logo_color.rgb * 2.0;
+    if (logo_mask > 0.05) {
+        final_logo += plasma_color.rgb * 0.8;
+    }
+
+    vec3 base_scene_rgb = fire_color.rgb + 1.5 * (0.1 + fire_color.rgb) * final_logo;
+
+    // --- 7. MUTATION ET ILLUMINATION PROGRESSIVE ---
+    vec3 smoke_burn_color = base_scene_rgb * 1.4;
+    vec3 smoke_cold_soot  = vec3(0.12, 0.13, 0.15);
+
+    vec3 fluid_smoke_color = mix(smoke_burn_color, smoke_cold_soot, smoothstep(0.35, 0.90, real_height));
+
+    // L'absorption et le corps de la fumée utilisent la transition nuancée
+    vec3 soot_absorption = base_scene_rgb * (1.0 - (smoke_alpha * 0.92));
+
+    // NUANÇAGE CHROMATIQUE : On atténue doucement l'apport de couleur sur les bords transparents
+    vec3 dynamic_smoke_body = fluid_smoke_color * smoke_alpha * smoothstep(0.0, 0.2, smoke_pattern);
+
+    vec3 final_rgb = soot_absorption + (dynamic_smoke_body * mix(0.45, 1.0, real_height));
+
+    imageStore(outputImage, ivec2(int(x), int(yy)), vec4(final_rgb, 1.0));
+}
+
+void main_not_bad() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    ivec2 size = imageSize(outputImage);
+
+    if (x >= uint(size.x) || y >= uint(size.y)) return;
+
+    uint yy = size.y - 1 - y;
+
+    uint seed = x + yy * uint(size.x) + uint(cos(time * 0.05 + 0.01) * 1000.0);
+    float rnd = pcg_hash(seed);
+    uint seed2 = x + yy * uint(size.x) + uint(5.7 * sin(time * 0.05));
+    float rnd2 = pcg_hash(seed2);
+
+    // --- 1. AXE DE HAUTEUR RÉEL ET CISAILLEMENT TURBULENT ---
+    float real_height = 1.0 - (float(yy) / float(size.y));
+
+    vec2 noise_uv = vec2(float(x) * 0.015, float(yy) * 0.008 + time * 1.5);
+    float wind = smooth_noise2d(noise_uv);
+    float force_x = sin(wind * 6.2831 + time * 4.5) * 75.0 * real_height;
+    float force_y = cos(wind * 3.1415 - time * 3.5) * 35.0 * real_height;
+
+    // --- 2. CONFIGURATION DES PLANS DE DÉFILEMENT COUPLÉS ---
+    float heat_scroll = time * 140.0;
+    float smoke_scroll = time * 220.0;
+
+    // --- 3. CALCUL DES PLASMAS DE CONFIGURATION NATIVE ---
+    float fire_plasma = computePlasma(float(x) + force_x * 0.4, float(yy) + heat_scroll, time, rnd, rnd2);
+    float smoke_plasma = computePlasma(float(x) + force_x, float(yy) + smoke_scroll + force_y, time, rnd, rnd2);
+
+    // --- 4. LECTURE DE LA MATRICE DE FEU AVEC INDICES ET DIMENSIONS ---
+    uint size_x  = fire_matrix[0];
+    uint size_y  = fire_matrix[1];
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
+    float fire_distortion_x = fire_plasma * 40.0;
+    float fire_distortion_y = sin(fire_plasma * 3.1415) * 15.0;
+
+    float fire_x = clamp(float(x) + fire_distortion_x, 0.0, float(size_x * scale_x - 1));
+    float fire_yy = clamp(float(yy) + fire_distortion_y, 0.0, float(size_y * scale_y - 1));
+
+    int row = int(floor(fire_x / float(scale_x)));
+    int column = int(floor(fire_yy / float(scale_y)));
+
+    row = clamp(row, 0, int(size_x) - 1);
+    column = clamp(column, 0, int(size_y) - 1);
+
+    vec4 fire_color = uint_to_rgba(palettes[fire_matrix[4 + row + column * int(size_x)]]);
+
+    // --- 5. INTÉGRATION ET MODULATION GRANULAIRE DE L'OPACITÉ ---
+    float center_x = float(x) / float(size.x);
+    float dynamic_cone = mix(0.40, 5.0, real_height);
+    float middle_column_mask = exp(-pow((center_x - 0.5) / dynamic_cone, 2.0));
+
+    float smoke_fluid_weight = smoothstep(0.25, 0.85, real_height) * middle_column_mask;
+
+    // CORRECTION VISUELLE : Le gain global repasse à une base plus équilibrée (2.1),
+    // et on injecte le bruit PCG 'rnd * 0.25' à l'intérieur du clamp pour briser la monotonie spatiale.
+    // Cela crée de fines variations locales de densité et enlève l'aspect "aplat uniforme".
+    float dynamic_gain = 2.1 + (rnd * 0.25);
+    float smoke_pattern = clamp((smoke_plasma * 0.6 + fire_plasma * 0.4 + 0.3) * dynamic_gain, 0.0, 1.0);
+    float smoke_alpha = smoke_pattern * smoke_fluid_weight;
+
+    // --- 6. RENDU DU LOGO DOOM ---
+    int r_offset = int(10.0 * rnd  * sin(0.001 * time * rnd));
+    int b_offset = int(-10.0 * rnd2 * sin(0.0015 * time * rnd2));
+
+    float logo_dist = fire_distortion_x * 0.6;
+    float logo_r = imageLoad(doom_logo, ivec2(clamp(int(x) + r_offset + int(logo_dist), 0, size.x - 1), int(yy))).r;
+    float logo_g = imageLoad(doom_logo, ivec2(clamp(int(x) + int(logo_dist),            0, size.x - 1), int(yy))).g;
+    float logo_b = imageLoad(doom_logo, ivec2(clamp(int(x) + b_offset + int(logo_dist), 0, size.x - 1), int(yy))).b;
+
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
+    float logo_mask = max(max(doom_logo_color.r, doom_logo_color.g), doom_logo_color.b);
+
+    vec4 plasma_color;
+    plasma_color.r = 0.5 * sin(fire_plasma * 3.1415) * 0.5 + 0.5;
+    plasma_color.g = 0.25 * cos(fire_plasma * 3.1415 + time * 0.005) * 0.5 + 0.5;
+    plasma_color.b = 0.15 * sin(fire_plasma * 3.1415 + 1.5) * 0.5 + 0.5;
+    plasma_color.a = 1.0;
+
+    vec3 final_logo = doom_logo_color.rgb * 2.0;
+    if (logo_mask > 0.05) {
+        final_logo += plasma_color.rgb * 0.8;
+    }
+
+    vec3 base_scene_rgb = fire_color.rgb + 1.5 * (0.1 + fire_color.rgb) * final_logo;
+
+    // --- 7. MUTATION CHROMATIQUE DISCRÈTE ---
+    vec3 smoke_burn_color = base_scene_rgb * 1.4;
+    vec3 smoke_cold_soot  = vec3(0.12, 0.13, 0.15); // Suie assombrie pour fondre les bords
+
+    vec3 fluid_smoke_color = mix(smoke_burn_color, smoke_cold_soot, smoothstep(0.35, 0.90, real_height));
+
+    // L'absorption intègre également la perturbation granulaire
+    vec3 soot_absorption = base_scene_rgb * (1.0 - (smoke_alpha * 0.92));
+    vec3 dynamic_smoke_body = fluid_smoke_color * smoke_alpha;
+
+    vec3 final_rgb = soot_absorption + (dynamic_smoke_body * mix(0.45, 1.0, real_height));
+
+    imageStore(outputImage, ivec2(int(x), int(yy)), vec4(final_rgb, 1.0));
+}
+
+void main_abit_too_much() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    ivec2 size = imageSize(outputImage);
+
+    if (x >= uint(size.x) || y >= uint(size.y)) return;
+
+    uint yy = size.y - 1 - y;
+
+    uint seed = x + yy * uint(size.x) + uint(cos(time * 0.05 + 0.01) * 1000.0);
+    float rnd = pcg_hash(seed);
+    uint seed2 = x + yy * uint(size.x) + uint(5.7 * sin(time * 0.05));
+    float rnd2 = pcg_hash(seed2);
+
+    // --- 1. AXE DE HAUTEUR RÉEL ET CISAILLEMENT TURBULENT ---
+    float real_height = 1.0 - (float(yy) / float(size.y));
+
+    vec2 noise_uv = vec2(float(x) * 0.015, float(yy) * 0.008 + time * 1.5);
+    float wind = smooth_noise2d(noise_uv);
+    float force_x = sin(wind * 6.2831 + time * 4.5) * 75.0 * real_height;
+    float force_y = cos(wind * 3.1415 - time * 3.5) * 35.0 * real_height;
+
+    // --- 2. CONFIGURATION DES PLANS DE DÉFILEMENT COUPLÉS ---
+    float heat_scroll = time * 140.0;
+    float smoke_scroll = time * 220.0;
+
+    // --- 3. CALCUL DES PLASMAS DE CONFIGURATION NATIVE ---
+    float fire_plasma = computePlasma(float(x) + force_x * 0.4, float(yy) + heat_scroll, time, rnd, rnd2);
+    float smoke_plasma = computePlasma(float(x) + force_x, float(yy) + smoke_scroll + force_y, time, rnd, rnd2);
+
+
+    // --- 4. LECTURE DE LA MATRICE DE FEU AVEC INDICES CONFIGURÉS ---
+    uint size_x  = fire_matrix[0];
+    uint size_y  = fire_matrix[1];
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
+    float fire_distortion_x = fire_plasma * 40.0;
+    float fire_distortion_y = sin(fire_plasma * 3.1415) * 15.0;
+
+    float fire_x = clamp(float(x) + fire_distortion_x, 0.0, float(size_x * scale_x - 1));
+    float fire_yy = clamp(float(yy) + fire_distortion_y, 0.0, float(size_y * scale_y - 1));
+
+    int row = int(floor(fire_x / float(scale_x)));
+    int column = int(floor(fire_yy / float(scale_y)));
+
+    row = clamp(row, 0, int(size_x) - 1);
+    column = clamp(column, 0, int(size_y) - 1);
+
+    vec4 fire_color = uint_to_rgba(palettes[fire_matrix[4 + row + column * int(size_x)]]);
+
+    // --- 5. INTÉGRATION CONTINUE EN FONDUE ---
+    float center_x = float(x) / float(size.x);
+    float dynamic_cone = mix(0.40, 5.0, real_height);
+    float middle_column_mask = exp(-pow((center_x - 0.5) / dynamic_cone, 2.0));
+
+    float smoke_fluid_weight = smoothstep(0.25, 0.85, real_height) * middle_column_mask;
+
+    // MODIFICATION MULTIPLICATRICE : On pousse le contraste à 2.4 pour densifier les formes et les rendre plus visibles
+    float smoke_pattern = clamp((smoke_plasma * 0.6 + fire_plasma * 0.4 + 0.3) * 2.4, 0.0, 1.0);
+    float smoke_alpha = smoke_pattern * smoke_fluid_weight;
+
+    // --- 6. RENDU DU LOGO DOOM ---
+    int r_offset = int(10.0 * rnd  * sin(0.001 * time * rnd));
+    int b_offset = int(-10.0 * rnd2 * sin(0.0015 * time * rnd2));
+
+    float logo_dist = fire_distortion_x * 0.6;
+    float logo_r = imageLoad(doom_logo, ivec2(clamp(int(x) + r_offset + int(logo_dist), 0, size.x - 1), int(yy))).r;
+    float logo_g = imageLoad(doom_logo, ivec2(clamp(int(x) + int(logo_dist),            0, size.x - 1), int(yy))).g;
+    float logo_b = imageLoad(doom_logo, ivec2(clamp(int(x) + b_offset + int(logo_dist), 0, size.x - 1), int(yy))).b;
+
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
+    float logo_mask = max(max(doom_logo_color.r, doom_logo_color.g), doom_logo_color.b);
+
+    vec4 plasma_color;
+    plasma_color.r = 0.5 * sin(fire_plasma * 3.1415) * 0.5 + 0.5;
+    plasma_color.g = 0.25 * cos(fire_plasma * 3.1415 + time * 0.005) * 0.5 + 0.5;
+    plasma_color.b = 0.15 * sin(fire_plasma * 3.1415 + 1.5) * 0.5 + 0.5;
+    plasma_color.a = 1.0;
+
+    vec3 final_logo = doom_logo_color.rgb * 2.0;
+    if (logo_mask > 0.05) {
+        final_logo += plasma_color.rgb * 0.8;
+    }
+
+    vec3 base_scene_rgb = fire_color.rgb + 1.5 * (0.1 + fire_color.rgb) * final_logo;
+
+    // --- 7. MUTATION ET ABSORPTION CHROMATIQUE REHAUSSÉE ---
+    vec3 smoke_burn_color = base_scene_rgb * 1.5;
+
+    // MODIFICATION DE TEINTE : Gris anthracite légèrement plus clair pour faire ressortir les volutes du fond noir
+    vec3 smoke_cold_soot  = vec3(0.14, 0.15, 0.18);
+
+    vec3 fluid_smoke_color = mix(smoke_burn_color, smoke_cold_soot, smoothstep(0.35, 0.90, real_height));
+
+    // L'absorption et la projection du volume reçoivent un petit boost d'efficacité
+    vec3 soot_absorption = base_scene_rgb * (1.0 - (smoke_alpha * 0.94));
+    vec3 dynamic_smoke_body = fluid_smoke_color * smoke_alpha;
+
+    vec3 final_rgb = soot_absorption + (dynamic_smoke_body * mix(0.5, 1.0, real_height));
+
+    imageStore(outputImage, ivec2(int(x), int(yy)), vec4(final_rgb, 1.0));
+}
+
+void main_smoke_almost_ok() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    ivec2 size = imageSize(outputImage);
+
+    if (x >= uint(size.x) || y >= uint(size.y)) return;
+
+    uint yy = size.y - 1 - y;
+
+    uint seed = x + yy * uint(size.x) + uint(cos(time * 0.05 + 0.01) * 1000.0);
+    float rnd = pcg_hash(seed);
+    uint seed2 = x + yy * uint(size.x) + uint(5.7 * sin(time * 0.05));
+    float rnd2 = pcg_hash(seed2);
+
+    // --- 1. AXE DE HAUTEUR RÉEL ET CISAILLEMENT TURBULENT ---
+    float real_height = 1.0 - (float(yy) / float(size.y));
+
+    // Bruit de vent continu partagé pour lier l'ensemble de la physique
+    vec2 noise_uv = vec2(float(x) * 0.015, float(yy) * 0.008 + time * 1.5);
+    float wind = smooth_noise2d(noise_uv);
+    float force_x = sin(wind * 6.2831 + time * 4.5) * 75.0 * real_height;
+    float force_y = cos(wind * 3.1415 - time * 3.5) * 35.0 * real_height;
+
+    // --- 2. CONFIGURATION DES PLANS DE DÉFILEMENT COUPLÉS ---
+    float heat_scroll = time * 140.0;
+    // La fumée possède son propre défilement rapide mais hérite du même cisaillement horizontal
+    float smoke_scroll = time * 220.0;
+
+    // --- 3. CALCUL DES PLASMAS DE CONFIGURATION NATIVE ---
+    float fire_plasma = computePlasma(float(x) + force_x * 0.4, float(yy) + heat_scroll, time, rnd, rnd2);
+    float smoke_plasma = computePlasma(float(x) + force_x, float(yy) + smoke_scroll + force_y, time, rnd, rnd2);
+
+    // --- 4. LECTURE DE LA MATRICE DE FEU AVEC INDICES CONFIGURÉS ---
+    uint size_x  = fire_matrix[0];
+    uint size_y  = fire_matrix[1];
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
+    float fire_distortion_x = fire_plasma * 40.0;
+    float fire_distortion_y = sin(fire_plasma * 3.1415) * 15.0;
+
+    float fire_x = clamp(float(x) + fire_distortion_x, 0.0, float(size_x * scale_x - 1));
+    float fire_yy = clamp(float(yy) + fire_distortion_y, 0.0, float(size_y * scale_y - 1));
+
+    int row = int(floor(fire_x / float(scale_x)));
+    int column = int(floor(fire_yy / float(scale_y)));
+
+    row = clamp(row, 0, int(size_x) - 1);
+    column = clamp(column, 0, int(size_y) - 1);
+
+    vec4 fire_color = uint_to_rgba(palettes[fire_matrix[4 + row + column * int(size_x)]]);
+
+    // --- 5. INTÉGRATION CONTINUE (MÉLANGE DE TYPE BLENDER) ---
+    float center_x = float(x) / float(size.x);
+    // Cône dynamique ultra-large au plafond pour éviter l'effet colonne étriquée
+    float dynamic_cone = mix(0.40, 5.0, real_height);
+    float middle_column_mask = exp(-pow((center_x - 0.5) / dynamic_cone, 2.0));
+
+    // COUPLAGE CONTINU : Fini le trigger ON/OFF. La fumée s'intensifie de façon fluide et analogique.
+    // Elle utilise une courbe sigmoïde douce basée sur la hauteur réelle.
+    float smoke_fluid_weight = smoothstep(0.25, 0.85, real_height) * middle_column_mask;
+
+    // Intensité de la structure interne de la fumée (basée sur le couplage des deux plasmas)
+    float smoke_pattern = clamp((smoke_plasma * 0.6 + fire_plasma * 0.4 + 0.3) * 2.0, 0.0, 1.0);
+    float smoke_alpha = smoke_pattern * smoke_fluid_weight;
+
+    // --- 6. RENDU DU LOGO DOOM ---
+    int r_offset = int(10.0 * rnd  * sin(0.001 * time * rnd));
+    int b_offset = int(-10.0 * rnd2 * sin(0.0015 * time * rnd2));
+
+    float logo_dist = fire_distortion_x * 0.6;
+    float logo_r = imageLoad(doom_logo, ivec2(clamp(int(x) + r_offset + int(logo_dist), 0, size.x - 1), int(yy))).r;
+    float logo_g = imageLoad(doom_logo, ivec2(clamp(int(x) + int(logo_dist),            0, size.x - 1), int(yy))).g;
+    float logo_b = imageLoad(doom_logo, ivec2(clamp(int(x) + b_offset + int(logo_dist), 0, size.x - 1), int(yy))).b;
+
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
+    float logo_mask = max(max(doom_logo_color.r, doom_logo_color.g), doom_logo_color.b);
+
+    vec4 plasma_color;
+    plasma_color.r = 0.5 * sin(fire_plasma * 3.1415) * 0.5 + 0.5;
+    plasma_color.g = 0.25 * cos(fire_plasma * 3.1415 + time * 0.005) * 0.5 + 0.5;
+    plasma_color.b = 0.15 * sin(fire_plasma * 3.1415 + 1.5) * 0.5 + 0.5;
+    plasma_color.a = 1.0;
+
+    vec3 final_logo = doom_logo_color.rgb * 2.0;
+    if (logo_mask > 0.05) {
+        final_logo += plasma_color.rgb * 0.8;
+    }
+
+    vec3 base_scene_rgb = fire_color.rgb + 1.5 * (0.1 + fire_color.rgb) * final_logo;
+
+    // --- 7. MUTATION ET ABSORPTION GRADUELLE CHROMATIQUE ---
+    // Au lieu de plaquer une couleur, la fumée vient MODIFIER et ÉTEINDRE la couleur de la scène.
+    // En bas (real_height faible), la suie est hautement incandescente. En haut, elle devient un bloc charbon.
+    vec3 smoke_burn_color = base_scene_rgb * 1.5;
+    vec3 smoke_cold_soot  = vec3(0.06, 0.07, 0.09); // Gris-noir de suie éteinte pour assombrir le plafond
+
+    // Transition chromatique douce : le feu se transmute en suie froide de manière continue
+    vec3 fluid_smoke_color = mix(smoke_burn_color, smoke_cold_soot, smoothstep(0.35, 0.90, real_height));
+
+    // L'absorption de la lumière suit la densité analogique du fluide (Fini l'effet calque)
+    vec3 soot_absorption = base_scene_rgb * (1.0 - (smoke_alpha * 0.92));
+    vec3 dynamic_smoke_body = fluid_smoke_color * smoke_alpha;
+
+    // Composition finale unifiée
+    vec3 final_rgb = soot_absorption + (dynamic_smoke_body * mix(0.4, 1.0, real_height));
+
+    imageStore(outputImage, ivec2(int(x), int(yy)), vec4(final_rgb, 1.0));
+}
+
+
+
+void main_smokde_bof() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    ivec2 size = imageSize(outputImage);
+
+    if (x >= uint(size.x) || y >= uint(size.y)) return;
+
+    uint yy = size.y - 1 - y;
+
+    uint seed = x + yy * uint(size.x) + uint(cos(time * 0.05 + 0.01) * 1000.0);
+    float rnd = pcg_hash(seed);
+    uint seed2 = x + yy * uint(size.x) + uint(5. * sin(time * 0.05));
+    float rnd2 = pcg_hash(seed2);
+
+    // --- 1. AXE DE HAUTEUR RÉEL ---
+    float real_height = 1.0 - (float(yy) / float(size.y));
+
+    // --- 2. DOUBLE OCTAVE DE VORONOI LISSÉ (VENT DE CONVECTION INVISIBLE) ---
+    // Fréquence basse (0.006) pour de grandes vagues déformantes fluides qui montent vite
+    vec2 smoke_uv1 = vec2(float(x) * 0.006, float(yy) * 0.006 + time * 3.0);
+    float smooth_dist1 = computeSmoothVoronoi(smoke_uv1, time);
+    float v1 = clamp(1.0 - (smooth_dist1 * 1.1), 0.0, 1.0);
+
+    // Deuxième octave plus petite pour casser la régularité, sans bords durs
+    vec2 smoke_uv2 = vec2(float(x) * 0.014, float(yy) * 0.014 + time * 4.5);
+    float smooth_dist2 = computeSmoothVoronoi(smoke_uv2, time * 1.3);
+    float v2 = clamp(1.0 - (smooth_dist2 * 1.2), 0.0, 1.0);
+
+    // Fusion douce du vent de convection
+    float convection_wind = mix(v1, v1 * v2 * 1.5, 0.4);
+
+    // --- 3. PLASMA DE MATIÈRE PROPULSÉ ET DÉFORMÉ ---
+    float heat_scroll = time * 140.0;
+
+    // Le Voronoi tord les coordonnées du plasma de manière fluide (Domain Warping)
+    // Cela crée le bouillonnement volumineux SANS jamais dessiner de ronds à l'écran.
+    float distorted_x = float(x) + (convection_wind * 45.0);
+    float distorted_yy_smoke = float(yy) + (time * 160.0) + (sin(convection_wind * 3.1415) * 25.0);
+
+    float plasma = computePlasma(distorted_x, distorted_yy_smoke, time, rnd, rnd2);
+
+    // Signal compacté et lissé (Biais de 0.25 pour l'épaisseur)
+    float smoke_pattern = clamp((plasma + 0.25) * 1.8, 0.0, 1.0);
+
+    // --- 4. PLASMA DE DISTORSION ARRIÈRE-PLAN ---
+    float combined_heat = mix(plasma, convection_wind - 0.5, 0.35);
+    float fire_distortion_x = combined_heat * 40.0;
+    float fire_distortion_y = sin(combined_heat * 3.1415) * 15.0;
+
+    // --- 5. LECTURE DE LA MATRICE DE FEU ---
+    uint size_x  = fire_matrix[0];
+    uint size_y  = fire_matrix[1];
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
+    float fire_x = clamp(float(x) + fire_distortion_x, 0.0, float(size_x * scale_x - 1));
+    float fire_yy = clamp(float(yy) + fire_distortion_y, 0.0, float(size_y * scale_y - 1));
+
+    int row = int(floor(fire_x / float(scale_x)));
+    int column = int(floor(fire_yy / float(scale_y)));
+
+    vec4 fire_color = uint_to_rgba(palettes[fire_matrix[4 + row + column * size_x]]);
+
+    // --- 6. ÉTALEMENT MAXIMUM ET OPACIFICATION EN HAUT ---
+    float center_x = float(x) / float(size.x);
+    float dynamic_cone = mix(0.35, 4.0, real_height);
+    float middle_column_mask = exp(-pow((center_x - 0.5) / dynamic_cone, 2.0));
+
+    // Naissance verticale douce
+    float smoke_trigger = smoothstep(0.35, 0.55, real_height);
+
+    // ATTÉNUATION CRITIQUE : L'opacité progressive utilise un smoothstep large
+    float smoke_alpha = clamp(smoke_pattern * middle_column_mask * smoke_trigger * real_height, 0.0, 1.0);
+
+    // Saturation finale douce au sommet (0.75 max au lieu de 1.0 pour éviter le côté "aplat de craie")
+    smoke_alpha = mix(smoke_alpha, 0.75, smoothstep(0.70, 0.98, real_height));
+
+    // --- 7. RENDU DU LOGO DOOM ---
+    int r_offset = int(10.0 * rnd  * sin(0.001 * time * rnd));
+    int b_offset = int(-10.0 * rnd2 * sin(0.0015 * time * rnd2));
+
+    float logo_dist = fire_distortion_x * 0.6;
+    float logo_r = imageLoad(doom_logo, ivec2(clamp(int(x) + r_offset + int(logo_dist), 0, size.x - 1), int(yy))).r;
+    float logo_g = imageLoad(doom_logo, ivec2(clamp(int(x) + int(logo_dist),            0, size.x - 1), int(yy))).g;
+    float logo_b = imageLoad(doom_logo, ivec2(clamp(int(x) + b_offset + int(logo_dist), 0, size.x - 1), int(yy))).b;
+
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
+    float logo_mask = max(max(doom_logo_color.r, doom_logo_color.g), doom_logo_color.b);
+
+    vec4 plasma_color;
+    plasma_color.r = 0.5 * sin(plasma * 3.1415) * 0.5 + 0.5;
+    plasma_color.g = 0.25 * cos(plasma * 3.1415 + time * 0.005) * 0.5 + 0.5;
+    plasma_color.b = 0.15 * sin(plasma * 3.1415 + 1.5) * 0.5 + 0.5;
+    plasma_color.a = 1.0;
+
+    vec3 final_logo = doom_logo_color.rgb * 2.0;
+    if (logo_mask > 0.05) {
+        final_logo += plasma_color.rgb * 0.8;
+    }
+
+    vec3 base_scene_rgb = fire_color.rgb + 1.5 * (0.1 + fire_color.rgb) * final_logo;
+
+    // --- 8. EFFET D'ABSORPTION OCCLUSIVE ATTÉNUÉ ---
+    // Dissipation douce de la lumière arrière-plan (occlusion à 65% max)
+    vec3 soot_absorption = base_scene_rgb * (1.0 - (smoke_alpha * 0.65));
+
+    // Teinte gris de suie estompée et intégrée au fond noir
+    vec3 smoke_base_color = vec3(0.12, 0.14, 0.18);
+    vec3 smoke_top_color  = vec3(0.28, 0.30, 0.33); // Plus sombre pour se fondre discrètement en haut
+    vec3 dynamic_smoke_body = mix(smoke_base_color, smoke_top_color, real_height) * (smoke_pattern * middle_column_mask * smoke_trigger);
+
+    vec3 final_rgb = soot_absorption + (dynamic_smoke_body * real_height * 0.50);
+
+    imageStore(outputImage, ivec2(int(x), int(yy)), vec4(final_rgb, 1.0));
+}
+
+
+void main_voronoi_3() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    ivec2 size = imageSize(outputImage);
+
+    if (x >= uint(size.x) || y >= uint(size.y)) return;
+
+    uint yy = size.y - 1 - y;
+
+    uint seed = x + yy * uint(size.x) + uint(cos(time * 0.05 + 0.01) * 1000.0);
+    float rnd = pcg_hash(seed);
+    uint seed2 = x + yy * uint(size.x) + uint(5. * sin(time * 0.05));
+    float rnd2 = pcg_hash(seed2);
+
+    // --- 1. AXE DE HAUTEUR RÉEL ---
+    float real_height = 1.0 - (float(yy) / float(size.y));
+
+    // --- 2. DOUBLE TEXTURATION DE CONVECTION BRUTE ET LISSE ---
+    // Échelle des blobs (0.007) avec défilement rapide vers le haut
+    vec2 smoke_uv = vec2(float(x) * 0.007, float(yy) * 0.007 + time * 3.8);
+
+    // Calcul 1 : Les masses de matière (Smooth)
+    float smooth_dist = computeSmoothVoronoi(smoke_uv, time);
+    float blob_intensity = clamp(1.0 - (smooth_dist * 1.1), 0.0, 1.0);
+    float blob_pattern = smoothstep(0.10, 0.65, blob_intensity);
+
+    // Calcul 2 : Les ombres dures de relief (Brute)
+    vec2 raw_voronoi_data = computeVoronoi(smoke_uv, time);
+    // On extrait les arrêtes dures de la cellule de convection pour sculpter les volumes
+    float cell_edges = smoothstep(0.20, 0.75, raw_voronoi_data.x);
+
+    // --- 3. PLASMA THERMIQUE ET DENSIFICATION ---
+    float heat_scroll = time * 140.0;
+    float plasma = computePlasma(float(x), float(yy) + heat_scroll, time, rnd, rnd2);
+
+    // Épaisseur compacte et lourde du motif de fumée
+    float smoke_pattern = clamp((blob_pattern * 0.65 + plasma * 0.35 + 0.25) * 2.2, 0.0, 1.0);
+
+    // --- 4. DISTORSIONS GÉOMÉTRIQUES ARRIÈRE-PLAN ---
+    float combined_heat = mix(plasma, blob_pattern - 0.5, 0.40);
+    float fire_distortion_x = combined_heat * 40.0;
+    float fire_distortion_y = sin(combined_heat * 3.1415) * 15.0;
+
+    // --- 5. LECTURE DE LA MATRICE DE FEU ---
+    uint size_x  = fire_matrix[0];
+    uint size_y  = fire_matrix[1];
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
+    float fire_x = clamp(float(x) + fire_distortion_x, 0.0, float(size_x * scale_x - 1));
+    float fire_yy = clamp(float(yy) + fire_distortion_y, 0.0, float(size_y * scale_y - 1));
+
+    int row = int(floor(fire_x / float(scale_x)));
+    int column = int(floor(fire_yy / float(scale_y)));
+
+    vec4 fire_color = uint_to_rgba(palettes[fire_matrix[4 + row + column * size_x]]);
+
+    // --- 6. ÉTALEMENT MAXIMUM ET OPACIFICATION EN PLAFOND ---
+    float center_x = float(x) / float(size.x);
+    float dynamic_cone = mix(0.35, 4.0, real_height);
+    float middle_column_mask = exp(-pow((center_x - 0.5) / dynamic_cone, 2.0));
+
+    float smoke_trigger = smoothstep(0.35, 0.55, real_height);
+    float smoke_alpha = clamp(smoke_pattern * middle_column_mask * smoke_trigger * real_height, 0.0, 1.0);
+
+    // Saturation totale à 100% au sommet absolu de l'image (mur de suie étalé)
+    smoke_alpha = mix(smoke_alpha, 1.0, smoothstep(0.65, 0.95, real_height));
+
+    // --- 7. RENDU DU LOGO DOOM ---
+    int r_offset = int(10.0 * rnd  * sin(0.001 * time * rnd));
+    int b_offset = int(-10.0 * rnd2 * sin(0.0015 * time * rnd2));
+
+    float logo_dist = fire_distortion_x * 0.6;
+    float logo_r = imageLoad(doom_logo, ivec2(clamp(int(x) + r_offset + int(logo_dist), 0, size.x - 1), int(yy))).r;
+    float logo_g = imageLoad(doom_logo, ivec2(clamp(int(x) + int(logo_dist),            0, size.x - 1), int(yy))).g;
+    float logo_b = imageLoad(doom_logo, ivec2(clamp(int(x) + b_offset + int(logo_dist), 0, size.x - 1), int(yy))).b;
+
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
+    float logo_mask = max(max(doom_logo_color.r, doom_logo_color.g), doom_logo_color.b);
+
+    vec4 plasma_color;
+    plasma_color.r = 0.5 * sin(plasma * 3.1415) * 0.5 + 0.5;
+    plasma_color.g = 0.25 * cos(plasma * 3.1415 + time * 0.005) * 0.5 + 0.5;
+    plasma_color.b = 0.15 * sin(plasma * 3.1415 + 1.5) * 0.5 + 0.5;
+    plasma_color.a = 1.0;
+
+    vec3 final_logo = doom_logo_color.rgb * 2.0;
+    if (logo_mask > 0.05) {
+        final_logo += plasma_color.rgb * 0.8;
+    }
+
+    vec3 base_scene_rgb = fire_color.rgb + 1.5 * (0.1 + fire_color.rgb) * final_logo;
+
+    // --- 8. ABSORPTION DE LA LUMIÈRE PAR LA MATIÈRE SOMBRE ---
+    vec3 soot_absorption = base_scene_rgb * (1.0 - smoke_alpha);
+
+    // Teinte charbonneuse gris-suie
+    vec3 smoke_base_color = vec3(0.14, 0.16, 0.22);
+    vec3 smoke_top_color  = vec3(0.35, 0.36, 0.38);
+    vec3 dynamic_smoke_body = mix(smoke_base_color, smoke_top_color, real_height) * (smoke_pattern * middle_column_mask * smoke_trigger);
+
+    vec3 smoke_rgb = soot_absorption + (dynamic_smoke_body * real_height * 0.95);
+
+    // --- 9. MODIFICATION EMBLÉMATIQUE : INTERPOLATION DES OMBRES DE SUIE DURES (EFFET 3D BLOB) ---
+    // Les arrêtes de la grille Voronoi ('cell_edges') viennent creuser des ombres noires et profondes
+    // directement dans la couleur de la fumée pour lui donner du relief et casser l'effet bain de vapeur.
+    float final_shadow_mask = cell_edges * middle_column_mask * smoke_trigger * real_height;
+    vec3 shadow_color = vec3(0.005, 0.008, 0.012); // Teinte d'ombre de suie ultra-sombre
+
+    // On applique l'ombre portée (plus violente au sommet de l'image)
+    vec3 final_rgb = mix(smoke_rgb, shadow_color, final_shadow_mask * 0.65);
+
+    imageStore(outputImage, ivec2(int(x), int(yy)), vec4(final_rgb, 1.0));
+}
+
+
+void main_turbulent_smoke() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    ivec2 size = imageSize(outputImage);
+
+    if (x >= uint(size.x) || y >= uint(size.y)) return;
+
+    uint yy = size.y - 1 - y;
+
+    uint seed = x + yy * uint(size.x) + uint(cos(time * 0.05 + 0.01) * 1000.0);
+    float rnd = pcg_hash(seed);
+    uint seed2 = x + yy * uint(size.x) + uint(5. * sin(time * 0.05));
+    float rnd2 = pcg_hash(seed2);
+
+    // --- 1. AXE DE HAUTEUR RÉEL ---
+    float real_height = 1.0 - (float(yy) / float(size.y));
+
+    // --- 2. CALCUL DU VORONOI INVISIBLE (VENT DE CONVECTION) ---
+    vec2 convection_uv = vec2(float(x) * 0.008, float(yy) * 0.008 + time * 2.5);
+    vec2 voronoi = computeVoronoi(convection_uv, time);
+    float smooth_convection = clamp(1.0 - voronoi.x, 0.0, 1.0);
+
+    // --- 3. INJECTION DE TURBULENCE ROTATIVE (VORTEX DE PHASE EN HAUT) ---
+    // Plus la fumée monte, plus les coordonnées se tordent en vagues asymétriques rapides
+    float vortex_strength = 35.0 * real_height;
+    vec2 vortex_warp = vec2(
+        sin(smooth_convection * 6.2831 + time * 3.0) * vortex_strength,
+        cos(smooth_convection * 6.2831 - time * 2.5) * vortex_strength
+    );
+
+    // --- 4. PLASMA DE MATIÈRE ULTRA-TURBULENT ---
+    float heat_scroll = time * 140.0;
+    // On combine les coordonnées natives avec le décalage chaotique du vortex
+    float distorted_x = float(x) + vortex_warp.x;
+    float distorted_yy_smoke = float(yy) + heat_scroll + vortex_warp.y;
+
+    float plasma = computePlasma(distorted_x, distorted_yy_smoke, time, rnd, rnd2);
+    float smoke_pattern = clamp(plasma * 1.4, 0.0, 1.0);
+
+    // --- 5. PLASMA DE DISTORSION ARRIÈRE-PLAN ---
+    float combined_heat = mix(plasma, smooth_convection - 0.5, 0.35);
+    float fire_distortion_x = combined_heat * 40.0;
+    float fire_distortion_y = sin(combined_heat * 3.1415) * 15.0;
+
+    // --- 6. LECTURE DE LA MATRICE DE FEU ---
+    uint size_x  = fire_matrix[0];
+    uint size_y  = fire_matrix[1];
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
+    float fire_x = clamp(float(x) + fire_distortion_x, 0.0, float(size_x * scale_x - 1));
+    float fire_yy = clamp(float(yy) + fire_distortion_y, 0.0, float(size_y * scale_y - 1));
+
+    int row = int(floor(fire_x / float(scale_x)));
+    int column = int(floor(fire_yy / float(scale_y)));
+
+    vec4 fire_color = uint_to_rgba(palettes[fire_matrix[4 + row + column * size_x]]);
+
+    // --- 7. ÉTALEMENT GLOBAL SUR TOUTE LA LARGEUR AU PLAFOND ---
+    float center_x = float(x) / float(size.x);
+
+    // MODIFICATION CLÉ : Le cône s'ouvre à 3.0 au sommet.
+    // Cela libère totalement la fumée sur l'axe X pour qu'elle s'étale sur les bords de l'écran.
+    float dynamic_cone = mix(0.35, 3.0, real_height);
+    float middle_column_mask = exp(-pow((center_x - 0.5) / dynamic_cone, 2.0));
+
+    // Seuil de naissance et opacité linéaire
+    float smoke_trigger = smoothstep(0.35, 0.55, real_height);
+    float opacity_growth = real_height;
+
+    float smoke_alpha = clamp(smoke_pattern * middle_column_mask * smoke_trigger * opacity_growth, 0.0, 1.0) * 0.88;
+
+    // --- 8. RENDU DU LOGO DOOM ---
+    int r_offset = int(10.0 * rnd  * sin(0.001 * time * rnd));
+    int b_offset = int(-10.0 * rnd2 * sin(0.0015 * time * rnd2));
+
+    float logo_dist = fire_distortion_x * 0.6;
+    float logo_r = imageLoad(doom_logo, ivec2(clamp(int(x) + r_offset + int(logo_dist), 0, size.x - 1), int(yy))).r;
+    float logo_g = imageLoad(doom_logo, ivec2(clamp(int(x) + int(logo_dist),            0, size.x - 1), int(yy))).g;
+    float logo_b = imageLoad(doom_logo, ivec2(clamp(int(x) + b_offset + int(logo_dist), 0, size.x - 1), int(yy))).b;
+
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
+    float logo_mask = max(max(doom_logo_color.r, doom_logo_color.g), doom_logo_color.b);
+
+    vec4 plasma_color;
+    plasma_color.r = 0.5 * sin(combined_heat * 3.1415) * 0.5 + 0.5;
+    plasma_color.g = 0.25 * cos(combined_heat * 3.1415 + time * 0.005) * 0.5 + 0.5;
+    plasma_color.b = 0.15 * sin(combined_heat * 3.1415 + 1.5) * 0.5 + 0.5;
+    plasma_color.a = 1.0;
+
+    vec3 final_logo = doom_logo_color.rgb * 2.0;
+    if (logo_mask > 0.05) {
+        final_logo += plasma_color.rgb * 0.8;
+    }
+
+    vec3 base_scene_rgb = fire_color.rgb + 1.5 * (0.1 + fire_color.rgb) * final_logo;
+
+    // --- 9. ABSORPTION ET INCORPORATION DU NUAGE ÉVALUÉ ---
+    vec3 soot_absorption = base_scene_rgb * (1.0 - (smoke_alpha * 0.85));
+
+    vec3 smoke_base_color = vec3(0.14, 0.18, 0.25);
+    vec3 smoke_top_color  = vec3(0.48, 0.50, 0.54);
+    vec3 dynamic_smoke_body = mix(smoke_base_color, smoke_top_color, real_height) * (smoke_pattern * middle_column_mask * smoke_trigger);
+
+    vec3 final_rgb = soot_absorption + (dynamic_smoke_body * opacity_growth * 0.80);
+
+    imageStore(outputImage, ivec2(int(x), int(yy)), vec4(final_rgb, 1.0));
+}
+
+
+void main_voronoi_smoke_2() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    ivec2 size = imageSize(outputImage);
+
+    if (x >= uint(size.x) || y >= uint(size.y)) return;
+
+    uint yy = size.y - 1 - y;
+
+    uint seed = x + yy * uint(size.x) + uint(cos(time * 0.05 + 0.01) * 1000.0);
+    float rnd = pcg_hash(seed);
+    uint seed2 = x + yy * uint(size.x) + uint(5. * sin(time * 0.05));
+    float rnd2 = pcg_hash(seed2);
+
+    // --- 1. AXE DE HAUTEUR RÉEL ---
+    float real_height = 1.0 - (float(yy) / float(size.y));
+
+    // --- 2. CALCUL DU VORONOI INVISIBLE (PERTURBATION DE FLUIDE) ---
+    vec2 convection_uv = vec2(float(x) * 0.008, float(yy) * 0.008 + time * 2.5);
+    vec2 voronoi = computeVoronoi(convection_uv, time);
+    float smooth_convection = clamp(1.0 - voronoi.x, 0.0, 1.0);
+
+    // --- 3. PLASMA THERMIQUE DE MATIÈRE ---
+    float heat_scroll = time * 140.0;
+    float distorted_x_coord = float(x) + (smooth_convection * 35.0);
+    float plasma = computePlasma(distorted_x_coord, float(yy) + heat_scroll, time, rnd, rnd2);
+    float smoke_pattern = clamp(plasma * 1.4, 0.0, 1.0);
+
+    // --- 4. PLASMA DE DISTORSION ARRIÈRE-PLAN ---
+    float combined_heat = mix(plasma, smooth_convection - 0.5, 0.35);
+    float fire_distortion_x = combined_heat * 40.0;
+    float fire_distortion_y = sin(combined_heat * 3.1415) * 15.0;
+
+    // --- 5. LECTURE DE LA MATRICE DE FEU AVEC INDICES SÉCURISÉS ---
+    uint size_x  = fire_matrix[0];
+    uint size_y  = fire_matrix[1];
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
+    float fire_x = clamp(float(x) + fire_distortion_x, 0.0, float(size_x * scale_x - 1));
+    float fire_yy = clamp(float(yy) + fire_distortion_y, 0.0, float(size_y * scale_y - 1));
+
+    int row = int(floor(fire_x / float(scale_x)));
+    int column = int(floor(fire_yy / float(scale_y)));
+
+    vec4 fire_color = uint_to_rgba(palettes[fire_matrix[4 + row + column * size_x]]);
+
+    // --- 6. CORRECTION : ÉLARGISSEMENT HORIZONTAL MASSIF AU PLAFOND ---
+    float center_x = float(x) / float(size.x);
+
+    // MODIFICATION CLÉ : On passe d'un cône serré de 0.35 à la base à un cône géant de 1.20 en haut.
+    // Cela permet aux volutes de s'évaser de manière exponentielle et d'occuper toute la largeur au sommet.
+    float dynamic_cone = mix(0.35, 1.20, real_height);
+    float middle_column_mask = exp(-pow((center_x - 0.5) / dynamic_cone, 2.0));
+
+    // Naissance verticale et progression linéaire de l'opacité
+    float smoke_trigger = smoothstep(0.35, 0.55, real_height);
+    float opacity_growth = real_height;
+
+    float smoke_alpha = clamp(smoke_pattern * middle_column_mask * smoke_trigger * opacity_growth, 0.0, 1.0) * 0.88;
+
+    // --- 7. RENDU DU LOGO DOOM ---
+    int r_offset = int(10.0 * rnd  * sin(0.001 * time * rnd));
+    int b_offset = int(-10.0 * rnd2 * sin(0.0015 * time * rnd2));
+
+    float logo_dist = fire_distortion_x * 0.6;
+    float logo_r = imageLoad(doom_logo, ivec2(clamp(int(x) + r_offset + int(logo_dist), 0, size.x - 1), int(yy))).r;
+    float logo_g = imageLoad(doom_logo, ivec2(clamp(int(x) + int(logo_dist),            0, size.x - 1), int(yy))).g;
+    float logo_b = imageLoad(doom_logo, ivec2(clamp(int(x) + b_offset + int(logo_dist), 0, size.x - 1), int(yy))).b;
+
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
+    float logo_mask = max(max(doom_logo_color.r, doom_logo_color.g), doom_logo_color.b);
+
+    vec4 plasma_color;
+    plasma_color.r = 0.5 * sin(combined_heat * 3.1415) * 0.5 + 0.5;
+    plasma_color.g = 0.25 * cos(combined_heat * 3.1415 + time * 0.005) * 0.5 + 0.5;
+    plasma_color.b = 0.15 * sin(combined_heat * 3.1415 + 1.5) * 0.5 + 0.5;
+    plasma_color.a = 1.0;
+
+    vec3 final_logo = doom_logo_color.rgb * 2.0;
+    if (logo_mask > 0.05) {
+        final_logo += plasma_color.rgb * 0.8;
+    }
+
+    vec3 base_scene_rgb = fire_color.rgb + 1.5 * (0.1 + fire_color.rgb) * final_logo;
+
+    // --- 8. INCORPORATION SOMBRE ET INTÉGRÉE DU BROUILLARD DE PLAFOND ---
+    vec3 soot_absorption = base_scene_rgb * (1.0 - (smoke_alpha * 0.85));
+
+    vec3 smoke_base_color = vec3(0.14, 0.18, 0.25);
+    vec3 smoke_top_color  = vec3(0.48, 0.50, 0.54);
+    vec3 dynamic_smoke_body = mix(smoke_base_color, smoke_top_color, real_height) * (smoke_pattern * middle_column_mask * smoke_trigger);
+
+    vec3 final_rgb = soot_absorption + (dynamic_smoke_body * opacity_growth * 0.80);
+
+    imageStore(outputImage, ivec2(int(x), int(yy)), vec4(final_rgb, 1.0));
+}
+
+
+
+void main_smoke_too_thin() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    ivec2 size = imageSize(outputImage);
+
+    if (x >= uint(size.x) || y >= uint(size.y)) return;
+
+    uint yy = size.y - 1 - y;
+
+    uint seed = x + yy * uint(size.x) + uint(cos(time * 0.05 + 0.01) * 1000.0);
+    float rnd = pcg_hash(seed);
+    uint seed2 = x + yy * uint(size.x) + uint(5. * sin(time * 0.05));
+    float rnd2 = pcg_hash(seed2);
+
+    // --- 1. AXE DE HAUTEUR RÉEL ---
+    // 0.0 tout en bas du feu, 1.0 tout en haut de l'écran
+    float real_height = 1.0 - (float(yy) / float(size.y));
+
+    // --- 2. CALCUL DU VORONOI INVISIBLE (VENT DE CONVECTION CYCLIQUE) ---
+    // Fréquence basse pour de grandes structures de distorsion de fluide
+    vec2 convection_uv = vec2(float(x) * 0.008, float(yy) * 0.008 + time * 2.5);
+    vec2 voronoi = computeVoronoi(convection_uv, time);
+    float smooth_convection = clamp(1.0 - voronoi.x, 0.0, 1.0);
+
+    // --- 3. PLASMA THERMIQUE DE MATIÈRE ---
+    float heat_scroll = time * 140.0;
+    // On tord les coordonnées du plasma par le Voronoi pour le faire bouillonner de manière continue
+    float distorted_x = float(x) + (smooth_convection * 35.0);
+    float plasma = computePlasma(distorted_x, float(yy) + heat_scroll, time, rnd, rnd2);
+
+    // Structure fluide continue (sans aucune forme géométrique de cercle)
+    float smoke_pattern = clamp(plasma * 1.4, 0.0, 1.0);
+
+    // --- 4. PLASMA DE DISTORSION ARRIÈRE-PLAN ---
+    float combined_heat = mix(plasma, smooth_convection - 0.5, 0.35);
+    float fire_distortion_x = combined_heat * 40.0;
+    float fire_distortion_y = sin(combined_heat * 3.1415) * 15.0;
+
+    // --- 5. LECTURE DE LA MATRICE DE FEU ---
+    uint size_x  = fire_matrix[0];
+    uint size_y  = fire_matrix[1];
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
+    float fire_x = clamp(float(x) + fire_distortion_x, 0.0, float(size_x * scale_x - 1));
+    float fire_yy = clamp(float(yy) + fire_distortion_y, 0.0, float(size_y * scale_y - 1));
+
+    int row = int(floor(fire_x / float(scale_x)));
+    int column = int(floor(fire_yy / float(scale_y)));
+
+    vec4 fire_color = uint_to_rgba(palettes[fire_matrix[4 + row + column * size_x]]);
+
+    // --- 6. MASQUES ET OPACIFICATION EXPO VERS LE HAUT ---
+    float center_x = float(x) / float(size.x);
+    // Le cône s'élargit en montant (0.35 -> 0.55) pour simuler la dispersion naturelle de la fumée
+    float dynamic_cone = mix(0.35, 0.55, real_height);
+    float middle_column_mask = exp(-pow((center_x - 0.5) / dynamic_cone, 2.0));
+
+    // Naissance : La fumée commence au milieu du logo
+    float smoke_trigger = smoothstep(0.35, 0.55, real_height);
+
+    // RECTIFICATION OPACITÉ : On utilise une croissance carrée.
+    // En bas, l'opacité est nulle. Au milieu, elle est discrète (~0.25).
+    // Tout en haut (real_height = 1.0), elle monte à 0.65 pour être TRÈS visible et présente.
+    float opacity_growth = pow(real_height, 2.0);
+    float smoke_alpha = clamp(smoke_pattern * middle_column_mask * smoke_trigger * opacity_growth, 0.0, 1.0) * 0.65;
+
+    // --- 7. RENDU DU LOGO DOOM ---
+    int r_offset = int(10.0 * rnd  * sin(0.001 * time * rnd));
+    int b_offset = int(-10.0 * rnd2 * sin(0.0015 * time * rnd2));
+
+    float logo_dist = fire_distortion_x * 0.6;
+    float logo_r = imageLoad(doom_logo, ivec2(clamp(int(x) + r_offset + int(logo_dist), 0, size.x - 1), int(yy))).r;
+    float logo_g = imageLoad(doom_logo, ivec2(clamp(int(x) + int(logo_dist),            0, size.x - 1), int(yy))).g;
+    float logo_b = imageLoad(doom_logo, ivec2(clamp(int(x) + b_offset + int(logo_dist), 0, size.x - 1), int(yy))).b;
+
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
+    float logo_mask = max(max(doom_logo_color.r, doom_logo_color.g), doom_logo_color.b);
+
+    vec4 plasma_color;
+    plasma_color.r = 0.5 * sin(combined_heat * 3.1415) * 0.5 + 0.5;
+    plasma_color.g = 0.25 * cos(combined_heat * 3.1415 + time * 0.005) * 0.5 + 0.5;
+    plasma_color.b = 0.15 * sin(combined_heat * 3.1415 + 1.5) * 0.5 + 0.5;
+    plasma_color.a = 1.0;
+
+    vec3 final_logo = doom_logo_color.rgb * 2.0;
+    if (logo_mask > 0.05) {
+        final_logo += plasma_color.rgb * 0.8;
+    }
+
+    vec3 base_scene_rgb = fire_color.rgb + 1.5 * (0.1 + fire_color.rgb) * final_logo;
+
+    // --- 8. INCORPORATION PROGRESSIVE DU BROUILLARD DE SUIE ---
+    // Absorption de la lumière arrière-plan (occlusion par la suie)
+    vec3 soot_absorption = base_scene_rgb * (1.0 - (smoke_alpha * 0.70));
+
+    // Teinte évolutive : gris-bleu discret à la base, évoluant vers un gris charbon présent en haut
+    vec3 smoke_base_color = vec3(0.14, 0.18, 0.25);
+    vec3 smoke_top_color  = vec3(0.45, 0.47, 0.50);
+    vec3 dynamic_smoke_body = mix(smoke_base_color, smoke_top_color, real_height) * (smoke_pattern * middle_column_mask * smoke_trigger);
+
+    // Mélange final
+    vec3 final_rgb = soot_absorption + (dynamic_smoke_body * opacity_growth * 0.55);
+
+    imageStore(outputImage, ivec2(int(x), int(yy)), vec4(final_rgb, 1.0));
+}
+
+
+
+void main_voronoi_2() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    ivec2 size = imageSize(outputImage);
+
+    if (x >= uint(size.x) || y >= uint(size.y)) return;
+
+    uint yy = size.y - 1 - y;
+
+    uint seed = x + yy * uint(size.x) + uint(cos(time * 0.05 + 0.01) * 1000.0);
+    float rnd = pcg_hash(seed);
+    uint seed2 = x + yy * uint(size.x) + uint(5. * sin(time * 0.05));
+    float rnd2 = pcg_hash(seed2);
+
+    // --- 1. AXE DE HAUTEUR RÉEL ---
+    float real_height = 1.0 - (float(yy) / float(size.y));
+
+    // --- 2. CALCUL DES CELLULES DE CONVECTION ATTÉNUÉES (MONTÉE PHYSIQUE) ---
+    // CORRECTION SENS : Utiliser le signe "+" devant le temps redresse le flux vers le haut
+    // Fréquence légèrement lissée (0.012) pour élargir les structures
+    vec2 convection_uv = vec2(float(x) * 0.012, float(yy) * 0.012 + time * 2.5);
+
+    vec2 voronoi = computeVoronoi(convection_uv, time);
+
+    // CORRECTION VISIBILITÉ : On applique un smoothstep très large (0.0 à 0.85) sur la distance.
+    // Cela supprime les bords durs et transforme les cercles opaques en nappes de brouillard vaporeuses.
+    float convection_intensity = clamp(1.0 - voronoi.x, 0.0, 1.0);
+    float smooth_convection = smoothstep(0.0, 0.85, convection_intensity);
+
+    // Pulsation asynchrone adoucie pour que le bouillonnement soit subtil
+    float cell_flicker = sin(time * 3.5 + voronoi.y * 12.5) * 0.15 + 0.85;
+    float final_convection = smooth_convection * cell_flicker;
+
+    // --- 3. PLASMA DE DISTORSION ARRIÈRE-PLAN ---
+    float heat_scroll = time * 140.0;
+    float plasma = computePlasma(float(x), float(yy) + heat_scroll, time, rnd, rnd2);
+    float combined_heat = mix(plasma, final_convection - 0.5, 0.40);
+
+    // --- 4. DISTORSIONS GÉOMÉTRIQUES ---
+    float fire_distortion_x = combined_heat * 40.0;
+    float fire_distortion_y = sin(combined_heat * 3.1415) * 15.0;
+
+    // --- 5. LECTURE DE LA MATRICE DE FEU ---
+    uint size_x  = fire_matrix[0];
+    uint size_y  = fire_matrix[1];
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
+    float distorted_x = clamp(float(x) + fire_distortion_x, 0.0, float(size_x * scale_x - 1));
+    float distorted_yy = clamp(float(yy) + fire_distortion_y, 0.0, float(size_y * scale_y - 1));
+
+    int row = int(floor(distorted_x / float(scale_x)));
+    int column = int(floor(distorted_yy / float(scale_y)));
+
+    vec4 fire_color = uint_to_rgba(palettes[fire_matrix[4 + row + column * size_x]]);
+
+    // --- 6. MASQUES DE CONFINEMENT ET ATTÉNUATION CRITIQUE DE L'ALPHA ---
+    float center_x = float(x) / float(size.x);
+    float middle_column_mask = exp(-pow((center_x - 0.5) / 0.35, 2.0));
+
+    // Zone d'émission au-dessus des flammes vives
+    float smoke_trigger = smoothstep(0.35, 0.55, real_height);
+
+    // CORRECTION OPACITÉ : On bride drastiquement le multiplicateur max à 0.40 (au lieu de 0.65).
+    // Les volutes cessent d'être de gros pâtés sombres et deviennent translucides.
+    float smoke_alpha = clamp(final_convection * middle_column_mask * smoke_trigger * real_height, 0.0, 1.0) * 0.40;
+
+    // --- 7. RENDU DU LOGO DOOM ---
+    int r_offset = int(10.0 * rnd  * sin(0.001 * time * rnd));
+    int b_offset = int(-10.0 * rnd2 * sin(0.0015 * time * rnd2));
+
+    float logo_dist = fire_distortion_x * 0.6;
+    float logo_r = imageLoad(doom_logo, ivec2(clamp(int(x) + r_offset + int(logo_dist), 0, size.x - 1), int(yy))).r;
+    float logo_g = imageLoad(doom_logo, ivec2(clamp(int(x) + int(logo_dist),            0, size.x - 1), int(yy))).g;
+    float logo_b = imageLoad(doom_logo, ivec2(clamp(int(x) + b_offset + int(logo_dist), 0, size.x - 1), int(yy))).b;
+
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
+    float logo_mask = max(max(doom_logo_color.r, doom_logo_color.g), doom_logo_color.b);
+
+    // Composition émissive arrière-plan
+    vec4 plasma_color;
+    plasma_color.r = 0.5 * sin(combined_heat * 3.1415) * 0.5 + 0.5;
+    plasma_color.g = 0.25 * cos(combined_heat * 3.1415 + time * 0.005) * 0.5 + 0.5;
+    plasma_color.b = 0.15 * sin(combined_heat * 3.1415 + 1.5) * 0.5 + 0.5;
+    plasma_color.a = 1.0;
+
+    vec3 final_logo = doom_logo_color.rgb * 2.0;
+    if (logo_mask > 0.05) {
+        final_logo += plasma_color.rgb * 0.8;
+    }
+
+    vec3 base_scene_rgb = fire_color.rgb + 1.5 * (0.1 + fire_color.rgb) * final_logo;
+
+    // --- 8. EFFET D'ABSORPTION ATTÉNUÉ ---
+    // La fumée bloque la lumière de manière beaucoup plus douce (0.50 max au lieu de 0.85)
+    vec3 soot_absorption = base_scene_rgb * (1.0 - (smoke_alpha * 0.50));
+
+    // Teinte de la fumée vaporeuse et diluée
+    vec3 smoke_base_color = vec3(0.15, 0.18, 0.24);
+    vec3 smoke_top_color  = vec3(0.40, 0.42, 0.45);
+    vec3 dynamic_smoke_body = mix(smoke_base_color, smoke_top_color, real_height) * (final_convection * middle_column_mask * smoke_trigger);
+
+    vec3 final_rgb = soot_absorption + (dynamic_smoke_body * 0.40);
+
+    // --- 9. OMBRES CELLULAIRES TRÈS ADOUCIES ---
+    // Les ombres sur les bords de cellules sont gommées pour enlever l'effet de démarcation dure
+    float edge_shadow = voronoi.x * middle_column_mask * smoke_trigger;
+    final_rgb = mix(final_rgb, vec3(0.005, 0.008, 0.012), edge_shadow * 0.20 * real_height);
+
+    imageStore(outputImage, ivec2(int(x), int(yy)), vec4(final_rgb, 1.0));
+}
+
+
+
+
+
+
+
+
+
+
+
+
+void main_voronoi_smoke() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    ivec2 size = imageSize(outputImage);
+
+    if (x >= uint(size.x) || y >= uint(size.y)) return;
+
+    uint yy = size.y - 1 - y;
+
+    uint seed = x + yy * uint(size.x) + uint(cos(time * 0.05 + 0.01) * 1000.0);
+    float rnd = pcg_hash(seed);
+    uint seed2 = x + yy * uint(size.x) + uint(5. * sin(time * 0.05));
+    float rnd2 = pcg_hash(seed2);
+
+    // --- 1. VORONOI FLUIDE MAIS TRÈS CONTRASTÉ ---
+    // Échelle intermédiaire pour avoir de grosses volutes dynamiques qui montent
+    vec2 voronoi_uv = vec2(float(x) * 0.018, float(yy) * 0.018 + time * 3.0);
+    float voronoi_dist = computeSmoothVoronoi(voronoi_uv, time);
+
+    // Intensité continue (on vire les seuils brutaux qui faisaient des morceaux de calque)
+    float voronoi_intensity = clamp(1.0 - (voronoi_dist * 1.2), 0.0, 1.0);
+
+    // --- 2. PLASMA DE DISTORSION ARRIÈRE-PLAN ---
+    float heat_scroll = time * 140.0;
+    float plasma = computePlasma(float(x), float(yy) + heat_scroll, time, rnd, rnd2);
+    float combined_heat = mix(plasma, voronoi_intensity - 0.5, 0.5);
+
+    // --- 3. DISTORSIONS GÉOMÉTRIQUES ---
+    float fire_distortion_x = combined_heat * 40.0;
+    float fire_distortion_y = sin(combined_heat * 3.1415) * 15.0;
+
+    // --- 4. LECTURE DE LA MATRICE DE FEU ---
+    uint size_x  = fire_matrix[0];
+    uint size_y  = fire_matrix[1];
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
+    float distorted_x = clamp(float(x) + fire_distortion_x, 0.0, float(size_x * scale_x - 1));
+    float distorted_yy = clamp(float(yy) + fire_distortion_y, 0.0, float(size_y * scale_y - 1));
+
+    int row = int(floor(distorted_x / float(scale_x)));
+    int column = int(floor(distorted_yy / float(scale_y)));
+
+    vec4 fire_color = uint_to_rgba(palettes[fire_matrix[4 + row + column * size_x]]);
+
+    // --- 5. LOGIQUE D'INTÉGRATION DU SMOG ET DES VOLUTES ---
+    float real_height = 1.0 - (float(column) / float(size_y));
+
+    float center_x = float(x) / float(size.x);
+    // Large cône vertical pour que la fumée se déploie depuis le centre
+    float middle_column_mask = exp(-pow((center_x - 0.5) / 0.32, 2.0));
+
+    // Zone de naissance fluide au-dessus du cœur du brasier
+    float smoke_trigger = smoothstep(0.35, 0.60, real_height);
+
+    // --- 6. RENDU DU LOGO DOOM ---
+    int r_offset = int(10.0 * rnd  * sin(0.001 * time * rnd));
+    int b_offset = int(-10.0 * rnd2 * sin(0.0015 * time * rnd2));
+
+    float logo_dist = fire_distortion_x * 0.6;
+    float logo_r = imageLoad(doom_logo, ivec2(clamp(int(x) + r_offset + int(logo_dist), 0, size.x - 1), int(yy))).r;
+    float logo_g = imageLoad(doom_logo, ivec2(clamp(int(x) + int(logo_dist),            0, size.x - 1), int(yy))).g;
+    float logo_b = imageLoad(doom_logo, ivec2(clamp(int(x) + b_offset + int(logo_dist), 0, size.x - 1), int(yy))).b;
+
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
+    float logo_mask = max(max(doom_logo_color.r, doom_logo_color.g), doom_logo_color.b);
+
+    // --- 7. COMPOSITION DU LOGO ET DU FEU DE BASE ---
+    vec4 plasma_color;
+    plasma_color.r = 0.5 * sin(combined_heat * 3.1415) * 0.5 + 0.5;
+    plasma_color.g = 0.25 * cos(combined_heat * 3.1415 + time * 0.005) * 0.5 + 0.5;
+    plasma_color.b = 0.15 * sin(combined_heat * 3.1415 + 1.5) * 0.5 + 0.5;
+    plasma_color.a = 1.0;
+
+    vec3 final_logo = doom_logo_color.rgb * 2.0;
+    if (logo_mask > 0.05) {
+        final_logo += plasma_color.rgb * 0.8;
+    }
+
+    // Notre scène émissive (Feu + Logo)
+    vec3 base_scene_rgb = fire_color.rgb + 1.5 * (0.1 + fire_color.rgb) * final_logo;
+
+    // --- 8. INCORPORATION SOMBRE ET INTÉGRÉE DE LA FUMÉE (FINI LE MULTIPLIÉ SURFACE) ---
+    // Au lieu de poser une couleur grise opaque, la fumée vient ASSOMBRIR le feu de manière sélective (Absorption).
+    // Les bosses de Voronoi bloquent la lumière du brasier, créant des silhouettes vaporeuses.
+    float smoke_density = voronoi_intensity * middle_column_mask * smoke_trigger * real_height;
+
+    // On atténue la scène de base là où la fumée est dense (effet d'occlusion de la suie)
+    vec3 soot_absorption = base_scene_rgb * (1.0 - (smoke_density * 0.75));
+
+    // On ajoute une très légère lueur de suie froide (gris bleuté) uniquement en hauteur pour donner du volume
+    vec3 smoke_body_color = vec3(0.20, 0.22, 0.28) * smoke_density * smoothstep(0.4, 0.9, real_height);
+
+    // Fusion finale
+    vec3 final_rgb = soot_absorption + smoke_body_color;
+
+    // --- 9. OMBRAGE TRIDIMENSIONNEL CONTINU EN PROFONDEUR ---
+    // Les creux du Voronoi génèrent des micro-ombres portées qui sculptent les volutes de l'intérieur
+    float shadow_factor = (1.0 - voronoi_intensity) * middle_column_mask * smoke_trigger;
+    final_rgb = mix(final_rgb, vec3(0.002, 0.004, 0.008), shadow_factor * 0.45 * real_height);
+
+    imageStore(outputImage, ivec2(int(x), int(yy)), vec4(final_rgb, 1.0));
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+void main_voronoi_bubbles() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    ivec2 size = imageSize(outputImage);
+
+    if (x >= uint(size.x) || y >= uint(size.y)) return;
+
+    uint yy = size.y - 1 - y;
+
+    uint seed = x + yy * uint(size.x) + uint(cos(time * 0.05 + 0.01) * 1000.0);
+    float rnd = pcg_hash(seed);
+    uint seed2 = x + yy * uint(size.x) + uint(5. * sin(time * 0.05));
+    float rnd2 = pcg_hash(seed2);
+
+    // --- 1. FACTEUR DE HAUTEUR ET SCROLLING ASCENDANT ---
+    float height_factor = float(yy) / float(size.y);
+    float heat_scroll = time * 160.0;
+
+    // --- 2. CALCUL VORONOI 100% LISSÉ - BULLS ÉLARGIES ---
+    // MODIFICATION : Passage du multiplicateur de 0.015 à 0.005 pour agrandir massivement la taille des bulles
+    vec2 voronoi_uv = vec2(float(x), float(yy) + heat_scroll) * 0.005;
+
+    // Calcul exclusif du Smooth Voronoi
+    float voronoi_dist = computeSmoothVoronoi(voronoi_uv, time);
+
+    // Contraste rééquilibré pour ces grandes structures (plage 0.15 à 0.75)
+    float smooth_voronoi_intensity = smoothstep(0.15, 0.75, clamp(1.0 - (voronoi_dist * 0.8), 0.0, 1.0));
+
+    // --- 3. COMBINAISON PLASMA + VORONOI ---
+    float plasma = computePlasma(float(x), float(yy) + heat_scroll, time, rnd, rnd2);
+    float combined_heat = mix(plasma, smooth_voronoi_intensity - 0.5, 0.5);
+
+    // --- 4. MASQUAGE HORIZONTAL DE LA COLONNE CENTRALE ---
+    float center_x = float(x) / float(size.x);
+    // On élargit légèrement la cloche de Gauss (0.22 au lieu de 0.16) pour s'adapter à la taille des nouvelles bulles
+    float middle_column_mask = exp(-pow((center_x - 0.5) / 0.22, 2.0));
+
+    // Zone verticale : libération des grosses volutes à partir du milieu du logo
+    float smoke_trigger = smoothstep(0.30, 0.55, height_factor);
+    float central_volute = smooth_voronoi_intensity * middle_column_mask * smoke_trigger;
+
+    // --- 5. PUISSANTE DÉFORMATION GÉOMÉTRIQUE (ONDULATIONS) ---
+    float fire_distortion_x = combined_heat * 55.0;
+    float fire_distortion_y = sin(combined_heat * 3.1415) * 25.0;
+
+    uint size_x = fire_matrix[0];
+    uint size_y = fire_matrix[1];
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
+    float distorted_x = clamp(float(x) + fire_distortion_x, 0.0, float(size_x * scale_x - 1));
+    float distorted_yy = clamp(float(yy) + fire_distortion_y, 0.0, float(size_y * scale_y - 1));
+
+    int row = int(floor(distorted_x / float(scale_x)));
+    int column = int(floor(distorted_yy / float(scale_y)));
+
+    // Lecture de la palette du feu distordue
+    vec4 fire_color = uint_to_rgba(palettes[fire_matrix[4 + row + column * size_x]]);
+
+    // --- 6. RENDU DU LOGO AVEC ONDULATIONS SYNCHRONES ---
+    int r_offset = int(12.0 * rnd  * sin(0.002 * time * rnd));
+    int b_offset = int(-12.0 * rnd2 * sin(0.0025 * time * rnd2));
+
+    ivec2 logo_coord_r = ivec2(clamp(int(x) + r_offset + int(fire_distortion_x), 0, size.x - 1), clamp(int(yy) + int(fire_distortion_y), 0, size.y - 1));
+    ivec2 logo_coord_g = ivec2(clamp(int(x) + int(fire_distortion_x),            0, size.x - 1), clamp(int(yy) + int(fire_distortion_y), 0, size.y - 1));
+    ivec2 logo_coord_b = ivec2(clamp(int(x) + b_offset + int(fire_distortion_x), 0, size.x - 1), clamp(int(yy) + int(fire_distortion_y), 0, size.y - 1));
+
+    float logo_r = imageLoad(doom_logo, logo_coord_r).r;
+    float logo_g = imageLoad(doom_logo, logo_coord_g).g;
+    float logo_b = imageLoad(doom_logo, logo_coord_b).b;
+
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
+
+    vec4 plasma_color;
+    plasma_color.r = 0.5 * sin(combined_heat * 3.1415) * 0.5 + 0.5;
+    plasma_color.g = 0.25 * cos(combined_heat * 3.1415 + time * 0.005) * 0.5 + 0.5;
+    plasma_color.b = 0.15 * sin(combined_heat * 3.1415 + 1.5) * 0.5 + 0.5;
+    plasma_color.a = 1.0;
+
+    // --- 7. COMPOSITION FINALE ET INJECTION DES GRANDES VOLUTES ---
+    float logo_mask = max(max(doom_logo_color.r, doom_logo_color.g), doom_logo_color.b);
+    vec4 final_logo_effect = doom_logo_color * 2.0;
+    if (logo_mask > 0.05) {
+        final_logo_effect += plasma_color * 0.7;
+    }
+
+    // Assemblage linéaire standard
+    vec3 final_rgb = fire_color.rgb + 1.5 * (0.1 + fire_color.rgb) * final_logo_effect.rgb;
+
+    // Injection des bulles de fumée élargies dans les teintes de la palette basse (bleu/cyan)
+    vec3 smoke_glow = vec3(0.1, 0.4, 1.0) * smooth_voronoi_intensity * central_volute * 2.5;
+    final_rgb += smoke_glow;
+
+    // Apport d'un relief incandescent à basse fréquence sur la mèche centrale
+    float cell_flicker = sin(time * 5.0 + combined_heat * 10.0) * 0.2 + 0.8;
+    final_rgb += 0.25 * vec3(1.0, 0.35, 0.05) * central_volute * cell_flicker;
+
+    imageStore(outputImage, ivec2(int(x), int(yy)), vec4(final_rgb, 0.0));
+}
+
+
+
+
+
+
+
+
+
+void main_voronoi() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    ivec2 size = imageSize(outputImage);
+
+    if (x >= uint(size.x) || y >= uint(size.y)) return;
+
+    uint yy = size.y - 1 - y;
+
+    uint seed = x + yy * uint(size.x) + uint(cos(time * 0.05 + 0.01) * 1000.0);
+    float rnd = pcg_hash(seed);
+    uint seed2 = x + yy * uint(size.x) + uint(5. * sin(time * 0.05));
+    float rnd2 = pcg_hash(seed2);
+
+    // --- 1. FACTEUR DE HAUTEUR ET SCROLLING ASCENDANT ---
+    float height_factor = float(yy) / float(size.y);
+    float heat_intensity = smoothstep(0.0, 0.8, 1.0 - height_factor);
+    float heat_scroll = time * 140.0;
+
+    // --- 2. CALCUL VORONOI MULTI-ÉCHELLE ---
+    // On passe des coordonnées UV à Voronoi. Multiplier par la fréquence (ex: 0.02) change la taille des cellules
+    vec2 voronoi_uv = vec2(float(x), float(yy) + heat_scroll) * 0.015;
+
+
+    vec2 voronoi = computeVoronoi(voronoi_uv, time);
+
+    // Inversion de la distance pour avoir le pic d'intensité au centre de la cellule de convection
+   float voronoi_intensity = 1.0 - voronoi.x;
+
+
+    float voronoi_dist = computeSmoothVoronoi(voronoi_uv, time);
+
+
+    // --- 3. COMBINAISON PLASMA + VORONOI ---
+    float plasma = computePlasma(float(x), float(yy) + heat_scroll, time, rnd, rnd2);
+
+    // Le plasma gère les grandes formes de distorsion, Voronoi apporte les micro-turbulences cellulaires
+    float combined_heat = mix(plasma, voronoi_intensity - 0.5, 0.4);
+
+    // --- 4. DEFORMATION GEOMETRIQUE DU FEU ---
+    float fire_distortion_x = combined_heat * 40.0 * heat_intensity;
+    float fire_distortion_y = sin(combined_heat * 3.1415) * 15.0 * heat_intensity;
+
+    uint size_x = fire_matrix[0];
+    uint size_y = fire_matrix[1];
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
+    float distorted_x = clamp(float(x) + fire_distortion_x, 0.0, float(size.x * scale_x - 1));
+    float distorted_yy = clamp(float(yy) + fire_distortion_y, 0.0, float(size.y * scale_y - 1));
+
+    int row = int(floor(distorted_x / float(scale_x)));
+    int column = int(floor(distorted_yy / float(scale_y)));
+
+    vec4 fire_color = uint_to_rgba(palettes[fire_matrix[4 + row + column * size_x]]);
+
+    // --- 5. RENDU DU LOGO AVEC ABERRATION ET DISTORSION ---
+    int r_offset = int(12.0 * rnd  * sin(0.002 * time * rnd));
+    int b_offset = int(-12.0 * rnd2 * sin(0.0025 * time * rnd2));
+
+    float logo_dist_x = fire_distortion_x * 0.6;
+    float logo_dist_y = fire_distortion_y * 0.6;
+
+    ivec2 logo_coord_r = ivec2(clamp(int(x) + r_offset + int(logo_dist_x), 0, size.x - 1), clamp(int(yy) + int(logo_dist_y), 0, size.y - 1));
+    ivec2 logo_coord_g = ivec2(clamp(int(x) + int(logo_dist_x),            0, size.x - 1), clamp(int(yy) + int(logo_dist_y), 0, size.y - 1));
+    ivec2 logo_coord_b = ivec2(clamp(int(x) + b_offset + int(logo_dist_x), 0, size.x - 1), clamp(int(yy) + int(logo_dist_y), 0, size.y - 1));
+
+    float logo_r = imageLoad(doom_logo, logo_coord_r).r;
+    float logo_g = imageLoad(doom_logo, logo_coord_g).g;
+    float logo_b = imageLoad(doom_logo, logo_coord_b).b;
+
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
+
+    // Colorisation du plasma/voronoi pour le logo
+    vec4 plasma_color;
+    plasma_color.r = 0.5 * sin(combined_heat * 3.1415) * 0.5 + 0.5;
+    plasma_color.g = 0.25 * cos(combined_heat * 3.1415 + time * 0.005) * 0.5 + 0.5;
+    plasma_color.b = 0.15 * sin(combined_heat * 3.1415 + 1.5) * 0.5 + 0.5;
+    plasma_color.a = 1.0;
+
+    // --- 6. COMPOSITION FINALE ET LUEUR CELLULAIRE ---
+    float logo_mask = max(max(doom_logo_color.r, doom_logo_color.g), doom_logo_color.b);
+    vec4 final_logo_effect = doom_logo_color * 2.0;
+    if (logo_mask > 0.05) {
+        final_logo_effect += plasma_color * 0.7;
+    }
+
+    vec3 final_rgb = fire_color.rgb + 1.5 * (0.1 + fire_color.rgb) * final_logo_effect.rgb;
+
+    // Utilisation de l'ID unique de la cellule de Voronoi (voronoi.y) pour créer des variations d'éclat thermiques d'une cellule à l'autre
+    float cell_flicker = sin(time * 5.0 + voronoi.y * 10.0) * 0.3 + 0.7;
+    final_rgb += 0.20 * vec3(1.0, 0.35, 0.05) * voronoi_intensity * cell_flicker * heat_intensity;
+
+    imageStore(outputImage, ivec2(int(x), int(yy)), vec4(final_rgb, 0.0));
+}
+
+void main_1() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    ivec2 size = imageSize(outputImage);
+
+    if (x >= uint(size.x) || y >= uint(size.y)) return;
+
+    uint yy = size.y - 1 - y;
+
+    // Seeds pour le bruit
+    uint seed = x + yy * uint(size.x) + uint(cos(time * 0.05 + 0.01) * 1000.0);
+    float rnd = pcg_hash(seed);
+    uint seed2 = x + yy * uint(size.x) + uint(5. * sin(time * 0.05));
+    float rnd2 = pcg_hash(seed2);
+
+    // --- 1. FACTEUR DE HAUTEUR ET COORDONNÉES DE DÉFILEMENT ---
+    float height_factor = float(yy) / float(size.y);
+    // Atténuation progressive vers le haut de l'écran pour éviter que tout tremble uniformément
+    float heat_intensity = smoothstep(0.0, 0.8, 1.0 - height_factor);
+
+    // Faire défiler le plasma vers le haut pour simuler le flux thermique montant
+    float heat_scroll = time * 150.0;
+    float plasma = computePlasma(float(x), float(yy) + heat_scroll, time, rnd, rnd2);
+
+    // --- 2. DÉFORMATION GÉOMÉTRIQUE BI-DIMENSIONNELLE ---
+    // Distorsions asymétriques basées sur le plasma et l'intensité locale de la chaleur
+    float fire_distortion_x = plasma * 35.0 * heat_intensity;
+    float fire_distortion_y = sin(plasma * 2.0) * 15.0 * heat_intensity;
+
+    uint size_x = fire_matrix[0];
+    uint size_y = fire_matrix[1];
+    uint scale_x = fire_matrix[2];
+    uint scale_y = fire_matrix[3];
+
+    // Application des déformations clampées pour la lecture de la FireMatrix
+    float distorted_x = clamp(float(x) + fire_distortion_x, 0.0, float(size.x * scale_x - 1));
+    float distorted_yy = clamp(float(yy) + fire_distortion_y, 0.0, float(size.y * scale_y - 1));
+
+    int row = int(floor(distorted_x / float(scale_x)));
+    int column = int(floor(distorted_yy / float(scale_y)));
+
+    // Lecture de la palette du feu distordue en X et en Y
+    vec4 fire_color = uint_to_rgba(palettes[fire_matrix[4 + row + column * size_x]]);
+
+    // --- 3. RENDU DU LOGO AVEC COMPORTEMENT CHROMATIQUE DYNAMIQUE ---
+    int r_offset = int(12.0 * rnd  * sin(0.002 * time * rnd));
+    int b_offset = int(-12.0 * rnd2 * sin(0.0025 * time * rnd2));
+
+    // Le logo subit la distorsion thermique de manière un peu plus subtile (0.7) pour rester lisible
+    float logo_dist_x = fire_distortion_x * 0.7;
+    float logo_dist_y = fire_distortion_y * 0.7;
+
+    ivec2 logo_coord_r = ivec2(clamp(int(x) + r_offset + int(logo_dist_x), 0, size.x - 1), clamp(int(yy) + int(logo_dist_y), 0, size.y - 1));
+    ivec2 logo_coord_g = ivec2(clamp(int(x) + int(logo_dist_x),            0, size.x - 1), clamp(int(yy) + int(logo_dist_y), 0, size.y - 1));
+    ivec2 logo_coord_b = ivec2(clamp(int(x) + b_offset + int(logo_dist_x), 0, size.x - 1), clamp(int(yy) + int(logo_dist_y), 0, size.y - 1));
+
+    float logo_r = imageLoad(doom_logo, logo_coord_r).r;
+    float logo_g = imageLoad(doom_logo, logo_coord_g).g;
+    float logo_b = imageLoad(doom_logo, logo_coord_b).b;
+
+    vec4 doom_logo_color = vec4(logo_r, logo_g, logo_b, 0.0);
+
+    // Palette de couleur du plasma
+    vec4 plasma_color;
+    plasma_color.r = 0.5 * sin(plasma * 3.1415 + 0.0001 * time) * 0.5 + 0.5;
+    plasma_color.g = 0.25 * cos(plasma * 3.1415 + time * 0.0005) * 0.5 + 0.5;
+    plasma_color.b = 0.15 * sin(plasma * 3.1415 + time * 0.000115 + 1.5) * 0.5 + 0.5;
+    plasma_color.a = 1.0;
+
+    // --- 4. COMPOSITION FINALE ET EFFET INCANDESCENT ---
+    float logo_mask = max(max(doom_logo_color.r, doom_logo_color.g), doom_logo_color.b);
+    vec4 final_logo_effect = doom_logo_color * 2.0;
+    if (logo_mask > 0.05) {
+        final_logo_effect += plasma_color * 0.7;
+    }
+
+    // Mélange final enrichi par le bruit thermique
+    vec3 final_rgb = fire_color.rgb + 1.5 * (0.1 + fire_color.rgb) * final_logo_effect.rgb;
+
+    // Ajout d'une lueur oscillante thermique en arrière-plan basée sur la hauteur
+    final_rgb += 0.15 * vec3(1.0, 0.4, 0.1) * sin(plasma * 5.0) * heat_intensity;
+
+    imageStore(outputImage, ivec2(int(x), int(yy)), vec4(final_rgb, 0.0));
+}
+
+
+void main_old() {
     uint x = gl_GlobalInvocationID.x;
     uint y = gl_GlobalInvocationID.y;
 
