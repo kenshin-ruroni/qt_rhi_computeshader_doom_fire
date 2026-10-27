@@ -364,7 +364,7 @@ private:
 
     size_t fire_height = 37;
 
-    size_t palette_index = 1;
+    size_t palette_index = 3;
 
 
     size_t scale_x = 2;
