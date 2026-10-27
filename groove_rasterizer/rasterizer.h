@@ -2,7 +2,7 @@
 
 #include <cstdlib>
 #include <cmath>
-
+#include <string.h>
 #include <random>
 #include <vector>
 #include <stdint.h>
@@ -250,6 +250,20 @@ private:
 
     }
 
+    inline void restart_fire()
+    {
+        memset(fire_matrix.data(),0,fire_matrix_width * fire_matrix_height * sizeof(uint32_t));
+        fire_matrix[0] = fire_matrix_width ;
+        fire_matrix[1] = fire_matrix_height;
+        fire_matrix[2] = scale_x;
+        fire_matrix[3] = scale_y;
+
+        for(size_t x = 0 ; x < fire_matrix_width; ++x)
+        {
+            fire_matrix[4 + x] =  palette_index * palette_size ;
+        }
+    }
+
     inline void update_fire_matrix()
     {
 
@@ -364,7 +378,7 @@ private:
 
     size_t fire_height = 37;
 
-    size_t palette_index = 1;
+    size_t palette_index = 3;
 
 
     size_t scale_x = 2;
@@ -396,17 +410,7 @@ private:
         // On réserve la taille : 2 emplacements (pour X et Y) + la taille du tableau 2D linéarisé
         fire_matrix.resize( 4 + fire_matrix_width * fire_height, 0);
 
-        fire_matrix[0] = fire_matrix_width ;
-        fire_matrix[1] = fire_matrix_height;
-        fire_matrix[2] = scale_x;
-        fire_matrix[3] = scale_y;
-
-
-
-        for(size_t x = 0 ; x < fire_matrix_width; ++x)
-        {
-            fire_matrix[4 + x] =  palette_index * palette_size ;
-        }
+        restart_fire();
 
          m_rhi = rhi();
         if (!m_rhi) {
